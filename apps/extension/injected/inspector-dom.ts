@@ -8,6 +8,7 @@
 
 export const HOST_ID = "inspector-lab-extension-root";
 export const HIGHLIGHT_ID = "inspector-lab-element-highlight";
+export const HOVER_HIGHLIGHT_ID = "inspector-lab-hover-highlight";
 export const SHOW_EVENT = "inspector-lab:show";
 
 export type AttributeEntry = { name: string; value: string };
@@ -50,7 +51,50 @@ export function isVoidElement(element: Element): boolean {
 
 /** The inspector must never show or select its own injected nodes. */
 export function isInspectorNode(node: Element): boolean {
-  return node.id === HOST_ID || node.id === HIGHLIGHT_ID;
+  return (
+    node.id === HOST_ID ||
+    node.id === HIGHLIGHT_ID ||
+    node.id === HOVER_HIGHLIGHT_ID
+  );
+}
+
+let hoverBox: HTMLDivElement | null = null;
+
+/**
+ * Paints the picker-style overlay over `element` on the host page — used when
+ * hovering rows in the Elements tree. Pass null to clear. The overlay is a
+ * singleton and position: fixed, so it needs no cleanup on scroll; it is
+ * repositioned or removed on the next call.
+ */
+export function highlightElement(element: Element | null): void {
+  if (!element || isInspectorNode(element) || !element.isConnected) {
+    hoverBox?.remove();
+    hoverBox = null;
+    return;
+  }
+
+  if (!hoverBox || !hoverBox.isConnected) {
+    hoverBox = document.createElement("div");
+    hoverBox.id = HOVER_HIGHLIGHT_ID;
+    Object.assign(hoverBox.style, {
+      position: "fixed",
+      zIndex: "2147483646",
+      pointerEvents: "none",
+      background: "rgba(111, 168, 220, 0.66)",
+      border: "1px solid rgba(255, 229, 153, 0.9)",
+      boxSizing: "border-box",
+      transition: "all 40ms linear",
+    });
+    document.documentElement.append(hoverBox);
+  }
+
+  const rect = element.getBoundingClientRect();
+  Object.assign(hoverBox.style, {
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+  });
 }
 
 /** Child elements of `node`, minus the inspector's own DOM. */

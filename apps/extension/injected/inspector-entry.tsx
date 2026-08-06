@@ -24,10 +24,16 @@ import {
   HOST_ID,
   SHOW_EVENT,
   describeElement,
+  highlightElement,
   isInspectorNode,
   snapshotElement,
   type ElementSnapshot,
 } from "~injected/inspector-dom";
+import {
+  EVALUATE_MESSAGE,
+  type EvaluateRequest,
+  type EvaluateResponse,
+} from "~lib/messages";
 import { ElementsPanel } from "~injected/panels/elements-panel";
 import {
   ConsolePanel,
@@ -80,6 +86,32 @@ const ResizeHandle = styled.div`
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+/**
+ * Console evaluation runs in the page's MAIN world, which only the background
+ * service worker can reach (chrome.scripting is not available here). If the
+ * extension was reloaded since injection, the runtime link is dead and
+ * sendMessage throws — surface that instead of failing silently.
+ */
+async function evaluateExpression(
+  expression: string,
+): Promise<EvaluateResponse> {
+  try {
+    const request: EvaluateRequest = { type: EVALUATE_MESSAGE, expression };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      EvaluateResponse | undefined;
+    if (!response || typeof response.preview !== "string") {
+      throw new Error("empty response");
+    }
+    return response;
+  } catch {
+    return {
+      ok: false,
+      preview:
+        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+    };
+  }
 }
 
 function initialFrame(): Frame {
@@ -385,6 +417,7 @@ function Inspector({ host }: { host: HTMLElement }) {
 
   function hideInspector() {
     setPicking(false);
+    highlightElement(null);
     host.style.display = "none";
   }
 
@@ -450,6 +483,7 @@ function Inspector({ host }: { host: HTMLElement }) {
             selectedElement={selectedElement}
             snapshot={snapshot}
             onSelectElement={selectElement}
+            onHoverElement={highlightElement}
             onApplyStyle={applyStyle}
           />
         )}
@@ -458,10 +492,9 @@ function Inspector({ host }: { host: HTMLElement }) {
             entries={entries}
             onSubmit={(expression) => {
               log("input", expression);
-              log(
-                "result",
-                "Expression evaluation is disabled in the in-page inspector.",
-              );
+              void evaluateExpression(expression).then((response) => {
+                log(response.ok ? "result" : "error", response.preview);
+              });
             }}
             onClear={() => setEntries([])}
           />

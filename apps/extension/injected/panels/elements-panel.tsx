@@ -514,6 +514,8 @@ export type ElementsPanelProps = {
   selectedElement: HTMLElement | null;
   snapshot: ElementSnapshot | null;
   onSelectElement: (element: HTMLElement) => void;
+  /** Paints or clears the page-side highlight while tree rows are hovered. */
+  onHoverElement: (element: Element | null) => void;
   onApplyStyle: (
     property: string,
     value: string,
@@ -525,6 +527,7 @@ export function ElementsPanel({
   selectedElement,
   snapshot,
   onSelectElement,
+  onHoverElement,
   onApplyStyle,
 }: ElementsPanelProps) {
   const [expanded, setExpanded] = useState<Set<Element>>(() => {
@@ -564,6 +567,9 @@ export function ElementsPanel({
   useEffect(() => {
     selectedRowRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedElement]);
+
+  /* Never leave a page highlight behind when the panel goes away. */
+  useEffect(() => () => onHoverElement(null), [onHoverElement]);
 
   const rows = useMemo(
     () => buildRows(root, expanded),
@@ -646,6 +652,7 @@ export function ElementsPanel({
             aria-label="DOM tree"
             tabIndex={0}
             onKeyDown={onKeyDown}
+            onMouseLeave={() => onHoverElement(null)}
           >
             {rows.map((row) => {
               if (row.kind === "doctype") {
@@ -686,6 +693,7 @@ export function ElementsPanel({
                     data-selected={isSelected ? "true" : undefined}
                     aria-hidden="true"
                     onClick={() => selectRow(row.element)}
+                    onMouseEnter={() => onHoverElement(row.element)}
                   >
                     <TreeIndent $depth={row.depth} />
                     <Twisty $expanded={false} $visible={false} />
@@ -710,6 +718,7 @@ export function ElementsPanel({
                   $selected={isSelected}
                   data-selected={isSelected ? "true" : undefined}
                   onClick={() => selectRow(row.element)}
+                  onMouseEnter={() => onHoverElement(row.element)}
                 >
                   <TreeIndent $depth={row.depth} />
                   <Twisty
@@ -740,7 +749,7 @@ export function ElementsPanel({
             })}
           </TreeScroller>
 
-          <StatusBar>
+          <StatusBar onMouseLeave={() => onHoverElement(null)}>
             {crumbs.length === 0 ? (
               <span>No element selected</span>
             ) : (
@@ -751,6 +760,7 @@ export function ElementsPanel({
                     type="button"
                     $selected={crumb === selectedElement}
                     onClick={() => selectRow(crumb)}
+                    onMouseEnter={() => onHoverElement(crumb)}
                   >
                     {describeElement(crumb)}
                   </Crumb>
