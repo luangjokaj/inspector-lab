@@ -1,0 +1,23 @@
+{
+  "name": "dev-inspector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workspace for the Inspector Lab Chrome extension.",
+  "scripts": {
+    "dev": "pnpm -r --if-present --parallel run dev",
+    "build": "pnpm -r --if-present run build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^26",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@11.20.0"
+}

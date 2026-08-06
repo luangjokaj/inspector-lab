@@ -1,0 +1,16 @@
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  min-width: 360px;
+  width: 360px;
+  margin: 0;
+  background-color: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: #0a0e0e;
+  }
+}
