@@ -1,6 +1,6 @@
 import "styled-components";
-import type { Theme } from "cherry-styled-components";
+import type { AppTheme } from "~lib/theme";
 
 declare module "styled-components" {
-  export interface DefaultTheme extends Theme {}
+  export interface DefaultTheme extends AppTheme {}
 }
