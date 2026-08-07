@@ -185,6 +185,35 @@ const DetailValue = styled.span`
   color: ${({ theme }) => theme.devtools.text};
 `;
 
+/**
+ * The General section's status line, colored like DevTools: green for 2xx,
+ * amber for 3xx, red for failures, plain for everything else. The dot and
+ * the text share the tone via currentColor.
+ */
+const StatusValue = styled(DetailValue)<{
+  $tone: "success" | "warning" | "error" | "neutral";
+}>`
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: ${({ theme, $tone }) =>
+    $tone === "error"
+      ? theme.devtools.status.error
+      : $tone === "warning"
+        ? theme.devtools.status.warning
+        : $tone === "success"
+          ? theme.devtools.status.success
+          : theme.devtools.text};
+`;
+
+const StatusDot = styled.span`
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  border-radius: 50%;
+`;
+
 const DetailNote = styled.div`
   padding: 8px;
   color: ${({ theme }) => theme.devtools.textSubtle};
@@ -217,6 +246,18 @@ function classify(initiatorType: string, url: string): RequestKind {
   if (/\.css(\?|$)/.test(url)) return "stylesheet";
   if (/\.js(\?|$)/.test(url)) return "script";
   return "other";
+}
+
+/** Tone for the General section's status marker, mirroring the grid's
+ *  `StatusCell` coloring and adding amber for redirects. */
+function statusTone(
+  row: NetworkRow,
+): "success" | "warning" | "error" | "neutral" {
+  if (row.failed) return "error";
+  if (row.pending) return "neutral";
+  if (row.status.startsWith("2")) return "success";
+  if (row.status.startsWith("3")) return "warning";
+  return "neutral";
 }
 
 function formatBytes(bytes: number): string {
@@ -687,7 +728,10 @@ export function NetworkPanel({
                     </DetailRow>
                     <DetailRow>
                       <DetailName>Status:</DetailName>
-                      <DetailValue>
+                      <StatusValue $tone={statusTone(selectedRow)}>
+                        {statusTone(selectedRow) !== "neutral" && (
+                          <StatusDot aria-hidden="true" />
+                        )}
                         {selectedRow.detail?.error ??
                           selectedRow.headers?.error ??
                           `${selectedRow.status}${
@@ -695,7 +739,7 @@ export function NetworkPanel({
                               ? ` ${selectedRow.detail.statusText}`
                               : ""
                           }`}
-                      </DetailValue>
+                      </StatusValue>
                     </DetailRow>
                     <DetailRow>
                       <DetailName>Duration:</DetailName>
