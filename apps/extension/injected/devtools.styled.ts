@@ -74,7 +74,13 @@ export const InspectorWindow = styled.section`
   overflow: hidden;
   background: ${({ theme }) => theme.devtools.surface};
   border: solid 1px ${({ theme }) => theme.devtools.border};
-  box-shadow: ${({ theme }) => theme.shadows.xl};
+  /* Dark mode re-cuts the second layer of Cherry's shadows.xl (blur 3 →
+     34, spread 0 → -16): the tight white edge glow becomes a wide faint
+     halo that reads better against dark pages. Light mode keeps the token. */
+  box-shadow: ${({ theme }) =>
+    theme.isDark
+      ? "0px 24px 32px 0px rgba(255, 255, 255, 0.24), 0px 2px 34px -16px rgba(255, 255, 255, 0.12)"
+      : theme.shadows.xl};
   box-sizing: border-box;
 
   *,
