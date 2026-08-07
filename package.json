@@ -2,7 +2,7 @@
   "name": "inspector-lab-devtools",
   "version": "0.1.0",
   "private": true,
-  "description": "Workspace for Inspector Lab - DevTools, an in-page devtools Chrome extension.",
+  "description": "Inspector Lab - DevTools: a Manifest V3 browser extension that opens a movable, full-featured DevTools window inside any web page.",
   "license": "MIT",
   "scripts": {
     "dev": "pnpm -r --if-present --parallel run dev",
