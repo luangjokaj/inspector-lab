@@ -258,6 +258,32 @@ const NoDeclarations = styled.div`
   font-style: italic;
 `;
 
+/** Selector line of a rule block, with the stylesheet name on the right. */
+const RuleHeader = styled.div`
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+`;
+
+const RuleSource = styled.span`
+  flex: 0 1 auto;
+  max-width: 45%;
+  margin-left: auto;
+  overflow: hidden;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const PaneNote = styled.div`
+  padding: 4px 6px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  font-style: italic;
+`;
+
 /**
  * Sits inside the `element.style` block, where DevTools lets you type a new
  * declaration straight into the rule.
@@ -1067,14 +1093,44 @@ export function ElementsPanel({
                 </Feedback>
               )}
 
-              <CssBlock>
-                <CssSelector>{snapshot.selector}</CssSelector>{" "}
-                <Punct>{"{"}</Punct>
-                <NoDeclarations>
-                  matched CSS rules are not read from stylesheets
-                </NoDeclarations>
-                <Punct>{"}"}</Punct>
-              </CssBlock>
+              {snapshot.matchedRules.map((rule, index) => (
+                <CssBlock key={`${rule.selector}-${index}`}>
+                  <RuleHeader>
+                    <span>
+                      <CssSelector>{rule.selector}</CssSelector>{" "}
+                      <Punct>{"{"}</Punct>
+                    </span>
+                    <RuleSource title={rule.source}>{rule.source}</RuleSource>
+                  </RuleHeader>
+                  {rule.declarations.length === 0 ? (
+                    <NoDeclarations>no declarations</NoDeclarations>
+                  ) : (
+                    rule.declarations.map((entry) => (
+                      <CssDeclaration key={entry.name}>
+                        <DeclarationText>
+                          <CssProperty>{entry.name}</CssProperty>
+                          <Punct>: </Punct>
+                          <CssValue>{entry.value}</CssValue>
+                          <Punct>;</Punct>
+                        </DeclarationText>
+                      </CssDeclaration>
+                    ))
+                  )}
+                  <Punct>{"}"}</Punct>
+                </CssBlock>
+              ))}
+              {snapshot.matchedRules.length === 0 && (
+                <PaneNote>
+                  No stylesheet rules match {snapshot.selector}.
+                </PaneNote>
+              )}
+              {snapshot.inaccessibleSheets > 0 && (
+                <PaneNote>
+                  {snapshot.inaccessibleSheets} cross-origin stylesheet
+                  {snapshot.inaccessibleSheets === 1 ? "" : "s"} could not be
+                  read.
+                </PaneNote>
+              )}
             </Scroller>
           ) : (
             <>

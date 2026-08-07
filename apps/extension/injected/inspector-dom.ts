@@ -13,6 +13,14 @@ export const SHOW_EVENT = "inspector-lab:show";
 
 export type AttributeEntry = { name: string; value: string };
 
+/** One stylesheet rule that applies to the inspected element. */
+export type MatchedRule = {
+  selector: string;
+  /** Where the rule came from: the stylesheet file name, or `<style>`. */
+  source: string;
+  declarations: AttributeEntry[];
+};
+
 export type ElementSnapshot = {
   selector: string;
   tagName: string;
@@ -21,6 +29,10 @@ export type ElementSnapshot = {
   attributes: AttributeEntry[];
   /** Declarations on the element's `style` attribute, for the Styles pane. */
   inlineStyles: AttributeEntry[];
+  /** Stylesheet rules matching the element, most recently declared first. */
+  matchedRules: MatchedRule[];
+  /** Cross-origin stylesheets whose rules the inspector cannot read. */
+  inaccessibleSheets: number;
   /** Every resolved property, sorted, for the Computed pane. */
   computed: AttributeEntry[];
   text: string;
@@ -173,6 +185,83 @@ export function ancestorChain(element: Element): Element[] {
   return chain;
 }
 
+/** Label a stylesheet by its file name; inline `<style>` blocks have none. */
+function sheetLabel(sheet: CSSStyleSheet): string {
+  if (!sheet.href) return "<style>";
+  try {
+    const path = new URL(sheet.href).pathname;
+    return path.split("/").filter(Boolean).pop() ?? sheet.href;
+  } catch {
+    return sheet.href;
+  }
+}
+
+/**
+ * Collects the stylesheet rules that currently match `element`, descending
+ * into conditional groups only when their condition holds right now. Rules
+ * are returned most recently declared first — an approximation of the
+ * cascade (true ordering would need specificity), matching how DevTools
+ * lists the winning rules near the top. Cross-origin sheets throw on
+ * `cssRules` access and are only counted.
+ */
+export function matchedCssRules(element: Element): {
+  rules: MatchedRule[];
+  inaccessible: number;
+} {
+  const rules: MatchedRule[] = [];
+  let inaccessible = 0;
+
+  const visit = (list: CSSRuleList, source: string) => {
+    for (const rule of Array.from(list)) {
+      if (rule instanceof CSSStyleRule) {
+        let matches = false;
+        try {
+          matches = element.matches(rule.selectorText);
+        } catch {
+          /* Selectors the engine cannot parse for matching are skipped. */
+        }
+        if (matches) {
+          rules.push({
+            selector: rule.selectorText,
+            source,
+            declarations: Array.from(rule.style).map((name) => ({
+              name,
+              value: rule.style.getPropertyValue(name),
+            })),
+          });
+        }
+        continue;
+      }
+      if (rule instanceof CSSMediaRule) {
+        if (window.matchMedia(rule.conditionText).matches) {
+          visit(rule.cssRules, source);
+        }
+        continue;
+      }
+      if (rule instanceof CSSSupportsRule) {
+        if (CSS.supports(rule.conditionText)) visit(rule.cssRules, source);
+        continue;
+      }
+      // Other grouping rules (@layer blocks, etc.) always apply.
+      if (rule instanceof CSSGroupingRule) visit(rule.cssRules, source);
+    }
+  };
+
+  for (const sheet of Array.from(document.styleSheets)) {
+    if (sheet.disabled) continue;
+    let cssRules: CSSRuleList;
+    try {
+      cssRules = sheet.cssRules;
+    } catch {
+      inaccessible += 1;
+      continue;
+    }
+    visit(cssRules, sheetLabel(sheet));
+  }
+
+  return { rules: rules.reverse(), inaccessible };
+}
+
 export function snapshotElement(element: HTMLElement): ElementSnapshot {
   const computed = window.getComputedStyle(element);
   const rect = element.getBoundingClientRect();
@@ -185,6 +274,9 @@ export function snapshotElement(element: HTMLElement): ElementSnapshot {
     (name) => ({ name, value: element.style.getPropertyValue(name) }),
   );
 
+  const { rules: matchedRules, inaccessible: inaccessibleSheets } =
+    matchedCssRules(element);
+
   return {
     selector: uniqueSelector(element),
     tagName: element.tagName.toLowerCase(),
@@ -195,6 +287,8 @@ export function snapshotElement(element: HTMLElement): ElementSnapshot {
       value,
     })),
     inlineStyles,
+    matchedRules,
+    inaccessibleSheets,
     computed: computedEntries,
     text: truncate(collapseWhitespace(element.textContent ?? ""), 180),
     rect: {
