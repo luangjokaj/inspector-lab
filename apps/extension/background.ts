@@ -270,6 +270,20 @@ function installConsoleInterceptor(eventName: string, limit: number): boolean {
 }
 
 /**
+ * chrome.cookies checks host permissions per cookie URL; without the per-site
+ * grant the popup requests at launch, calls reject with a host-permission
+ * error that deserves a clearer message than Chrome's own.
+ */
+function describeCookieError(error: unknown, action: string): string {
+  if (error instanceof Error && /host permission/i.test(error.message)) {
+    return "Cookie access is not granted for this site. Relaunch the inspector from the toolbar popup and allow cookie access.";
+  }
+  return error instanceof Error
+    ? `Could not ${action}: ${error.message}`
+    : `Could not ${action}.`;
+}
+
+/**
  * True when `host` (the inspector tab's hostname) can see a cookie scoped to
  * `cookieDomain` — the domains chrome.cookies.getAll({url}) itself returns.
  */
@@ -348,10 +362,7 @@ chrome.runtime.onMessage.addListener(
           sendResponse({
             ok: false,
             cookies: [],
-            error:
-              error instanceof Error
-                ? `Could not read cookies: ${error.message}`
-                : "Could not read cookies for this tab.",
+            error: describeCookieError(error, "read cookies"),
           } satisfies GetCookiesResponse);
         });
 
@@ -394,10 +405,7 @@ chrome.runtime.onMessage.addListener(
         .catch((error: unknown) => {
           sendResponse({
             ok: false,
-            error:
-              error instanceof Error
-                ? `Could not delete cookie: ${error.message}`
-                : "Could not delete the cookie.",
+            error: describeCookieError(error, "delete the cookie"),
           } satisfies DeleteCookieResponse);
         });
 

@@ -100,6 +100,21 @@ function toExtensionPath(bundleUrl: string): string {
   return resolved.pathname.replace(/^\//, "");
 }
 
+/**
+ * chrome.cookies is gated on host permissions, which activeTab does not
+ * extend to — without this grant the Cookies tab always reads empty. Asked
+ * per site (never all sites), and only while the click gesture is fresh;
+ * already-granted origins resolve true without showing a prompt.
+ */
+async function requestCookieAccess(tabUrl: string): Promise<boolean> {
+  try {
+    const origin = `${new URL(tabUrl).origin}/*`;
+    return await chrome.permissions.request({ origins: [origin] });
+  } catch {
+    return false;
+  }
+}
+
 function Popup() {
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
   const [message, setMessage] = useState("");
@@ -124,6 +139,11 @@ function Popup() {
         );
       }
 
+      // Before any await chains: permission prompts need the user gesture.
+      const cookieAccess = /^https?:/.test(tab.url)
+        ? await requestCookieAccess(tab.url)
+        : false;
+
       const [existing] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: revealExistingInspector,
@@ -138,7 +158,11 @@ function Popup() {
       }
 
       setLaunchState("success");
-      setMessage("Inspector launched. You can close this popup.");
+      setMessage(
+        cookieAccess
+          ? "Inspector launched. You can close this popup."
+          : "Inspector launched. Cookie access was not granted, so the Cookies tab will stay empty on this site.",
+      );
     } catch (error) {
       setLaunchState("error");
       setMessage(
