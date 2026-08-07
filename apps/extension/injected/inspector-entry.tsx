@@ -62,6 +62,7 @@ import {
 import { SourcesPanel } from "~injected/panels/sources-panel";
 import { NetworkPanel } from "~injected/panels/network-panel";
 import { CookiesPanel } from "~injected/panels/cookies-panel";
+import { StoragePanel } from "~injected/panels/storage-panel";
 
 const MIN_WIDTH = 480;
 const MIN_HEIGHT = 320;
@@ -80,7 +81,14 @@ type DockSide = "floating" | "bottom" | "left" | "right";
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 /** Tab order matches Chrome DevTools: Elements is always first. */
-const TABS = ["Elements", "Console", "Sources", "Network", "Cookies"] as const;
+const TABS = [
+  "Elements",
+  "Console",
+  "Sources",
+  "Network",
+  "Cookies",
+  "Storage",
+] as const;
 type TabName = (typeof TABS)[number];
 
 type Frame = {
@@ -1033,6 +1041,7 @@ function Inspector({ host }: { host: HTMLElement }) {
             requestAccess={requestCookieAccess}
           />
         )}
+        {tab === "Storage" && <StoragePanel />}
       </PanelHost>
 
       {dock === "floating" ? (

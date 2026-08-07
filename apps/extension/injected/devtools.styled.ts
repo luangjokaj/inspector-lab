@@ -459,6 +459,57 @@ export const GridRow = styled.tr<{ $selected?: boolean }>`
   }
 `;
 
+/**
+ * Hover-revealed per-row action cell for data grids (delete a cookie, drop a
+ * storage key). Restyles the Cherry `IconButton` inside from the parent, the
+ * same way `ToolbarControls` does — never by wrapping the Cherry component.
+ */
+export const GridActionCell = styled.td`
+  padding: 0;
+
+  button {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    padding: 0;
+    color: ${({ theme }) => theme.devtools.textSubtle};
+    background: transparent;
+    border: none;
+    border-radius: 2px;
+    box-shadow: none;
+    transition: none;
+    opacity: 0;
+
+    svg {
+      width: 11px;
+      height: 11px;
+    }
+
+    &:hover:not(:disabled) {
+      color: ${({ theme }) => theme.devtools.text};
+      background: ${({ theme }) => theme.devtools.tabHoverBackground};
+      border: none;
+      box-shadow: none;
+    }
+
+    &:focus,
+    &:active {
+      border: none;
+      box-shadow: none;
+    }
+
+    &:focus-visible {
+      outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+      outline-offset: -1px;
+      opacity: 1;
+    }
+  }
+
+  ${GridRow}:hover & button {
+    opacity: 1;
+  }
+`;
+
 /* ------------------------------------------------------ cherry overrides */
 
 /**
