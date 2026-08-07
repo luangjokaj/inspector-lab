@@ -1475,7 +1475,10 @@ function Inspector({ host }: { host: HTMLElement }) {
   }
 
   return (
-    <InspectorWindow aria-label="Inspector Lab - DevTools in-page inspector">
+    <InspectorWindow
+      $floating={dock === "floating"}
+      aria-label="Inspector Lab - DevTools in-page inspector"
+    >
       <WindowToolbar $dragging={dragging} onPointerDown={beginDrag}>
         <ToolbarControls>
           <IconButton

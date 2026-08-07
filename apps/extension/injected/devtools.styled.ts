@@ -195,7 +195,7 @@ export const devtoolsCheckbox = css`
 /* ------------------------------------------------------------------ shell */
 
 /** The whole floating window: a flat, square-cornered DevTools frame. */
-export const InspectorWindow = styled.section`
+export const InspectorWindow = styled.section<{ $floating: boolean }>`
   ${devtoolsUi};
   position: relative;
   display: flex;
@@ -205,12 +205,15 @@ export const InspectorWindow = styled.section`
   overflow: hidden;
   background: ${({ theme }) => theme.devtools.surface};
   border: solid 1px ${({ theme }) => theme.devtools.border};
-  /* Dark surfaces get a centered white halo instead of a drop shadow — a
-     dark drop disappears against dark pages. Light mode keeps the token. */
-  box-shadow: ${({ theme }) =>
-    theme.isDark
-      ? "rgba(255, 255, 255, 0.24) 0px 0px 64px -12px"
-      : theme.shadows.xl};
+  /* Only the free-floating window casts a shadow — docked, it sits flush
+     against a viewport edge like DevTools. Dark surfaces get a centered
+     white halo instead of a drop, which disappears against dark pages. */
+  box-shadow: ${({ theme, $floating }) =>
+    !$floating
+      ? "none"
+      : theme.isDark
+        ? "rgba(255, 255, 255, 0.24) 0px 0px 64px -12px"
+        : theme.shadows.xl};
   box-sizing: border-box;
 
   *,
