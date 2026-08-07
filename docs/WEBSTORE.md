@@ -16,15 +16,18 @@ Language: English
 
 ### Summary (max 132 characters, comes from the manifest description)
 
-> A movable in-page DevTools window for any browser, even iPad: elements,
-> console, network, sources, cookies, and storage.
+> A movable in-page DevTools window for any browser, even iPad: DOM Inspector,
+> Elements, Console, Network, Sources, Cookies, Storage.
+
+131 characters. Must match the `description` in
+`apps/extension/package.json`, which Plasmo writes into the manifest.
 
 ### Description
 
 Plain text, the dashboard does not render markdown. Paste as-is:
 
 ```
-Inspector Lab - DevTools puts a real DevTools window inside the page itself: a movable, resizable, dockable inspector that works anywhere a browser can run extensions, including browsers that have no built-in DevTools at all, such as Orion on iPad and iPhone.
+Inspector Lab - DevTools puts a real DevTools window inside the page itself: a movable, resizable, dockable DOM Inspector with Elements, Console, Network, Sources, Cookies, and Storage panels. It works anywhere a browser can run extensions, including browsers that have no built-in DevTools at all, such as Orion on iPad and iPhone.
 
 WHY INSTALL IT
 
@@ -32,7 +35,7 @@ Native DevTools live in a separate panel and simply do not exist on most mobile 
 
 WHAT IT DOES
 
-- Elements: pick and highlight elements on the page, inspect the DOM tree, edit inline CSS with validation, force element states (hover, active, focus, visited), and read computed styles with a box-model diagram.
+- Elements: a live DOM Inspector. Pick and highlight elements on the page, inspect the DOM tree, edit inline CSS with validation, force element states (hover, active, focus, visited), and read computed styles with a box-model diagram.
 - Console: captures the page's console output (log, warn, error, and friends) and evaluates JavaScript expressions you type, in the page's own context.
 - Network: records requests live as the page makes them, with method, status, type, timing, headers, and fetch/XHR request and response bodies in a DevTools-style details pane.
 - Sources: lists the page's scripts and stylesheets in a collapsible tree and loads any file's content on demand for reading.
