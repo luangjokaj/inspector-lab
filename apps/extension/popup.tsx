@@ -162,6 +162,29 @@ function revealExistingInspector(hostId: string, showEvent: string): boolean {
   return true;
 }
 
+/**
+ * Fast path for a tab that already has the inspector: re-show it without
+ * re-evaluating the bundle. False means "not revealed, inject it" — including
+ * when the browser cannot run the func form of executeScript at all (Orion on
+ * iOS may be one). Falling through is safe rather than merely tolerable:
+ * bootstrap() runs the same already-open check and SHOW_EVENT dispatch itself,
+ * so a redundant injection re-shows the existing inspector instead of stacking
+ * a second one. A genuine permission failure still surfaces, raised by the
+ * injection below instead of here.
+ */
+async function revealInspector(tabId: number): Promise<boolean> {
+  try {
+    const [existing] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: revealExistingInspector,
+      args: [INSPECTOR_HOST_ID, INSPECTOR_SHOW_EVENT],
+    });
+    return existing?.result === true;
+  } catch {
+    return false;
+  }
+}
+
 function toExtensionPath(bundleUrl: string): string {
   const resolved = new URL(bundleUrl, chrome.runtime.getURL("/"));
   return resolved.pathname.replace(/^\//, "");
@@ -238,13 +261,9 @@ function Popup() {
         ? await requestCookieAccess(tab.url)
         : false;
 
-      const [existing] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: revealExistingInspector,
-        args: [INSPECTOR_HOST_ID, INSPECTOR_SHOW_EVENT],
-      });
+      const revealed = await revealInspector(tab.id);
 
-      if (!existing.result) {
+      if (!revealed) {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           files: [toExtensionPath(inspectorBundleUrl)],

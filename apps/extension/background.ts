@@ -145,55 +145,79 @@ function headerPairsFrom(
     ]);
 }
 
+/**
+ * Registers one webRequest listener, tolerating browsers that ship the
+ * namespace without the event. Orion on iOS exposes chrome.webRequest but
+ * supports neither onCompleted nor onErrorOccurred, and reading `.addListener`
+ * off an absent event throws at module scope — which would stop this file
+ * before the runtime.onMessage handler below is registered, silencing every
+ * panel instead of just the Network one. Also covers an extraInfoSpec the
+ * browser rejects.
+ */
+function registerWebRequestListener(register: () => void): void {
+  try {
+    register();
+  } catch {
+    /* Unsupported here: the Network panel falls back to the page's own
+       fetch/XHR hook, which needs no webRequest at all. */
+  }
+}
+
 if (chrome.webRequest) {
-  chrome.webRequest.onSendHeaders.addListener(
-    (details) => {
-      if (!openTabIds.has(details.tabId)) return;
-      const log = tabRequestLog(details.tabId);
-      log.set(details.requestId, {
-        url: details.url,
-        method: details.method,
-        resourceType: details.type,
-        status: 0,
-        startEpoch: details.timeStamp,
-        duration: 0,
-        fromCache: false,
-        error: null,
-        requestHeaders: headerPairsFrom(details.requestHeaders),
-        responseHeaders: [],
-      });
-      while (log.size > WEB_REQUEST_CAP) {
-        const oldest = log.keys().next().value;
-        if (oldest === undefined) break;
-        log.delete(oldest);
-      }
-    },
-    { urls: ["<all_urls>"] },
-    ["requestHeaders", "extraHeaders"],
-  );
+  registerWebRequestListener(() => {
+    chrome.webRequest.onSendHeaders.addListener(
+      (details) => {
+        if (!openTabIds.has(details.tabId)) return;
+        const log = tabRequestLog(details.tabId);
+        log.set(details.requestId, {
+          url: details.url,
+          method: details.method,
+          resourceType: details.type,
+          status: 0,
+          startEpoch: details.timeStamp,
+          duration: 0,
+          fromCache: false,
+          error: null,
+          requestHeaders: headerPairsFrom(details.requestHeaders),
+          responseHeaders: [],
+        });
+        while (log.size > WEB_REQUEST_CAP) {
+          const oldest = log.keys().next().value;
+          if (oldest === undefined) break;
+          log.delete(oldest);
+        }
+      },
+      { urls: ["<all_urls>"] },
+      ["requestHeaders", "extraHeaders"],
+    );
+  });
 
-  chrome.webRequest.onCompleted.addListener(
-    (details) => {
-      const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
-      if (!entry) return;
-      entry.status = details.statusCode;
-      entry.responseHeaders = headerPairsFrom(details.responseHeaders);
-      entry.fromCache = details.fromCache;
-      entry.duration = details.timeStamp - entry.startEpoch;
-    },
-    { urls: ["<all_urls>"] },
-    ["responseHeaders", "extraHeaders"],
-  );
+  registerWebRequestListener(() => {
+    chrome.webRequest.onCompleted.addListener(
+      (details) => {
+        const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
+        if (!entry) return;
+        entry.status = details.statusCode;
+        entry.responseHeaders = headerPairsFrom(details.responseHeaders);
+        entry.fromCache = details.fromCache;
+        entry.duration = details.timeStamp - entry.startEpoch;
+      },
+      { urls: ["<all_urls>"] },
+      ["responseHeaders", "extraHeaders"],
+    );
+  });
 
-  chrome.webRequest.onErrorOccurred.addListener(
-    (details) => {
-      const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
-      if (!entry) return;
-      entry.error = details.error;
-      entry.duration = details.timeStamp - entry.startEpoch;
-    },
-    { urls: ["<all_urls>"] },
-  );
+  registerWebRequestListener(() => {
+    chrome.webRequest.onErrorOccurred.addListener(
+      (details) => {
+        const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
+        if (!entry) return;
+        entry.error = details.error;
+        entry.duration = details.timeStamp - entry.startEpoch;
+      },
+      { urls: ["<all_urls>"] },
+    );
+  });
 }
 
 /** Drops an origin's prehook registration once no open tab needs it. */
