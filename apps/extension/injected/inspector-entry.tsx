@@ -579,13 +579,43 @@ function Inspector({ host }: { host: HTMLElement }) {
   }, [host, picking, selectElement]);
 
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
-    if (event.button !== 0 || dock !== "floating") return;
+    if (event.button !== 0) return;
     const target = event.target as Element;
     if (target.closest("button")) return;
 
     event.preventDefault();
     setDragging(true);
-    const start = { x: event.clientX, y: event.clientY, frame };
+
+    // Dragging a docked window tears it off into floating mode, re-centered
+    // under the cursor so the toolbar stays in hand; the dock buttons snap it
+    // back. Floating windows just move as before.
+    let startFrame = frame;
+    if (dock !== "floating") {
+      startFrame = {
+        width: frame.width,
+        height: frame.height,
+        left: clamp(
+          event.clientX - frame.width / 2,
+          VIEWPORT_GUTTER,
+          Math.max(
+            VIEWPORT_GUTTER,
+            window.innerWidth - frame.width - VIEWPORT_GUTTER,
+          ),
+        ),
+        top: clamp(
+          event.clientY - 14,
+          VIEWPORT_GUTTER,
+          Math.max(
+            VIEWPORT_GUTTER,
+            window.innerHeight - frame.height - VIEWPORT_GUTTER,
+          ),
+        ),
+      };
+      setDock("floating");
+      setFrame(startFrame);
+    }
+
+    const start = { x: event.clientX, y: event.clientY, frame: startFrame };
 
     const move = (moveEvent: PointerEvent) => {
       setFrame((current) => ({
@@ -867,11 +897,7 @@ function Inspector({ host }: { host: HTMLElement }) {
 
   return (
     <InspectorWindow aria-label="Inspector Lab in-page inspector">
-      <WindowToolbar
-        $dragging={dragging}
-        $draggable={dock === "floating"}
-        onPointerDown={beginDrag}
-      >
+      <WindowToolbar $dragging={dragging} onPointerDown={beginDrag}>
         <ToolbarControls>
           <IconButton
             aria-label={picking ? "Cancel element picker" : "Pick an element"}
@@ -914,6 +940,13 @@ function Inspector({ host }: { host: HTMLElement }) {
         <ToolbarSpacer />
 
         <ToolbarControls>
+          <IconButton
+            aria-label="Float the inspector to move it freely"
+            $active={dock === "floating"}
+            onClick={() => setDock("floating")}
+          >
+            <Icon name="Move" size={14} />
+          </IconButton>
           <IconButton
             aria-label="Dock to bottom"
             $active={dock === "bottom"}

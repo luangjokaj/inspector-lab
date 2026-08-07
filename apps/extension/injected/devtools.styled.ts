@@ -89,19 +89,14 @@ export const InspectorWindow = styled.section`
  * one line the way DevTools lays out its tabbed pane header. Doubles as the
  * drag handle — pointer handling skips buttons, so tabs stay clickable.
  */
-export const WindowToolbar = styled.header<{
-  $dragging: boolean;
-  /** Docked windows are not draggable, so the grab cursor would lie. */
-  $draggable?: boolean;
-}>`
+export const WindowToolbar = styled.header<{ $dragging: boolean }>`
   display: flex;
   align-items: stretch;
   flex: 0 0 auto;
   min-height: ${({ theme }) => theme.devtools.toolbarHeight};
   background: ${({ theme }) => theme.devtools.toolbar};
   border-bottom: solid 1px ${({ theme }) => theme.devtools.border};
-  cursor: ${({ $dragging, $draggable = true }) =>
-    $draggable ? ($dragging ? "grabbing" : "grab") : "default"};
+  cursor: ${({ $dragging }) => ($dragging ? "grabbing" : "grab")};
   user-select: none;
   touch-action: none;
 `;
