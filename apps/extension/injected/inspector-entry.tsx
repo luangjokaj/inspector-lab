@@ -30,12 +30,19 @@ import {
   type ElementSnapshot,
 } from "~injected/inspector-dom";
 import {
+  DELETE_COOKIE_MESSAGE,
   EVALUATE_MESSAGE,
+  GET_COOKIES_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
   randomConsoleEventName,
   type CapturedConsolePayload,
+  type CookieEntry,
+  type DeleteCookieRequest,
+  type DeleteCookieResponse,
   type EvaluateRequest,
   type EvaluateResponse,
+  type GetCookiesRequest,
+  type GetCookiesResponse,
   type InterceptConsoleRequest,
   type InterceptConsoleResponse,
 } from "~lib/messages";
@@ -47,6 +54,7 @@ import {
 } from "~injected/panels/console-panel";
 import { SourcesPanel } from "~injected/panels/sources-panel";
 import { NetworkPanel } from "~injected/panels/network-panel";
+import { CookiesPanel } from "~injected/panels/cookies-panel";
 
 const MIN_WIDTH = 480;
 const MIN_HEIGHT = 320;
@@ -55,7 +63,7 @@ const VIEWPORT_GUTTER = 12;
 const MAX_CONSOLE_ENTRIES = 1000;
 
 /** Tab order matches Chrome DevTools: Elements is always first. */
-const TABS = ["Elements", "Console", "Sources", "Network"] as const;
+const TABS = ["Elements", "Console", "Sources", "Network", "Cookies"] as const;
 type TabName = (typeof TABS)[number];
 
 type Frame = {
@@ -116,6 +124,54 @@ async function evaluateExpression(
     return {
       ok: false,
       preview:
+        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+    };
+  }
+}
+
+/**
+ * Cookie access lives behind chrome.cookies in the background (only it holds
+ * the "cookies" permission); the same dead-runtime caveat as evaluation
+ * applies, so failures surface as messages instead of silent empty lists.
+ */
+async function loadCookies(): Promise<GetCookiesResponse> {
+  try {
+    const request: GetCookiesRequest = { type: GET_COOKIES_MESSAGE };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      GetCookiesResponse | undefined;
+    if (!response || !Array.isArray(response.cookies)) {
+      throw new Error("empty response");
+    }
+    return response;
+  } catch {
+    return {
+      ok: false,
+      cookies: [],
+      error:
+        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+    };
+  }
+}
+
+async function deleteCookie(
+  cookie: CookieEntry,
+): Promise<DeleteCookieResponse> {
+  try {
+    const request: DeleteCookieRequest = {
+      type: DELETE_COOKIE_MESSAGE,
+      name: cookie.name,
+      domain: cookie.domain,
+      path: cookie.path,
+      secure: cookie.secure,
+    };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      DeleteCookieResponse | undefined;
+    if (!response) throw new Error("empty response");
+    return response;
+  } catch {
+    return {
+      ok: false,
+      error:
         "The inspector lost its connection to the extension. Reload the page and launch it again.",
     };
   }
@@ -583,6 +639,9 @@ function Inspector({ host }: { host: HTMLElement }) {
         )}
         {tab === "Sources" && <SourcesPanel />}
         {tab === "Network" && <NetworkPanel />}
+        {tab === "Cookies" && (
+          <CookiesPanel loadCookies={loadCookies} deleteCookie={deleteCookie} />
+        )}
       </PanelHost>
 
       <ResizeHandle

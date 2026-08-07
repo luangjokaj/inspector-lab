@@ -1,9 +1,16 @@
 import {
+  DELETE_COOKIE_MESSAGE,
   EVALUATE_MESSAGE,
+  GET_COOKIES_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
   isConsoleEventName,
+  type CookieEntry,
+  type DeleteCookieRequest,
+  type DeleteCookieResponse,
   type EvaluateRequest,
   type EvaluateResponse,
+  type GetCookiesResponse,
+  type GetCookiesRequest,
   type InterceptConsoleRequest,
   type InterceptConsoleResponse,
 } from "~lib/messages";
@@ -262,12 +269,27 @@ function installConsoleInterceptor(eventName: string, limit: number): boolean {
   return true;
 }
 
+/**
+ * True when `host` (the inspector tab's hostname) can see a cookie scoped to
+ * `cookieDomain` — the domains chrome.cookies.getAll({url}) itself returns.
+ */
+function cookieVisibleToHost(host: string, cookieDomain: string): boolean {
+  const bare = cookieDomain.replace(/^\./, "");
+  return host === bare || host.endsWith(`.${bare}`);
+}
+
 chrome.runtime.onMessage.addListener(
   (message: unknown, sender, sendResponse) => {
-    const request = message as EvaluateRequest | InterceptConsoleRequest;
+    const request = message as
+      | EvaluateRequest
+      | InterceptConsoleRequest
+      | GetCookiesRequest
+      | DeleteCookieRequest;
     if (
       request?.type !== EVALUATE_MESSAGE &&
-      request?.type !== INTERCEPT_CONSOLE_MESSAGE
+      request?.type !== INTERCEPT_CONSOLE_MESSAGE &&
+      request?.type !== GET_COOKIES_MESSAGE &&
+      request?.type !== DELETE_COOKIE_MESSAGE
     ) {
       return;
     }
@@ -276,15 +298,111 @@ chrome.runtime.onMessage.addListener(
     // comes from the sender, never from the message payload.
     const tabId = sender.tab?.id;
     if (sender.id !== chrome.runtime.id || tabId === undefined) {
-      sendResponse(
-        request.type === EVALUATE_MESSAGE
-          ? ({
-              ok: false,
-              preview: "Evaluation request rejected: unknown sender.",
-            } satisfies EvaluateResponse)
-          : ({ ok: false } satisfies InterceptConsoleResponse),
-      );
+      if (request.type === EVALUATE_MESSAGE) {
+        sendResponse({
+          ok: false,
+          preview: "Evaluation request rejected: unknown sender.",
+        } satisfies EvaluateResponse);
+      } else if (request.type === GET_COOKIES_MESSAGE) {
+        sendResponse({
+          ok: false,
+          cookies: [],
+          error: "Request rejected: unknown sender.",
+        } satisfies GetCookiesResponse);
+      } else {
+        sendResponse({ ok: false } satisfies
+          InterceptConsoleResponse | DeleteCookieResponse);
+      }
       return;
+    }
+
+    if (request.type === GET_COOKIES_MESSAGE) {
+      const tabUrl = sender.tab?.url;
+      if (!tabUrl || !/^https?:/.test(tabUrl)) {
+        sendResponse({
+          ok: false,
+          cookies: [],
+          error: "Cookies are only readable on http(s) pages.",
+        } satisfies GetCookiesResponse);
+        return;
+      }
+
+      chrome.cookies
+        .getAll({ url: tabUrl })
+        .then((cookies) => {
+          sendResponse({
+            ok: true,
+            cookies: cookies.map((cookie): CookieEntry => ({
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain,
+              path: cookie.path,
+              expirationDate: cookie.expirationDate,
+              httpOnly: cookie.httpOnly,
+              secure: cookie.secure,
+              sameSite: cookie.sameSite,
+            })),
+          } satisfies GetCookiesResponse);
+        })
+        .catch((error: unknown) => {
+          sendResponse({
+            ok: false,
+            cookies: [],
+            error:
+              error instanceof Error
+                ? `Could not read cookies: ${error.message}`
+                : "Could not read cookies for this tab.",
+          } satisfies GetCookiesResponse);
+        });
+
+      // Keep the message channel open for the async response.
+      return true;
+    }
+
+    if (request.type === DELETE_COOKIE_MESSAGE) {
+      const tabUrl = sender.tab?.url;
+      const host =
+        tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl).hostname : "";
+      const valid =
+        typeof request.name === "string" &&
+        typeof request.domain === "string" &&
+        typeof request.path === "string" &&
+        request.path.startsWith("/") &&
+        typeof request.secure === "boolean" &&
+        host !== "" &&
+        // Never delete cookies the inspector's page could not see itself.
+        cookieVisibleToHost(host, request.domain);
+      if (!valid) {
+        sendResponse({
+          ok: false,
+          error: "Cookie deletion rejected.",
+        } satisfies DeleteCookieResponse);
+        return;
+      }
+
+      const bareDomain = request.domain.replace(/^\./, "");
+      const cookieUrl = `${request.secure ? "https" : "http"}://${bareDomain}${request.path}`;
+      chrome.cookies
+        .remove({ url: cookieUrl, name: request.name })
+        .then((details) => {
+          sendResponse({
+            ok: details !== null,
+            error:
+              details === null ? "The cookie could not be deleted." : undefined,
+          } satisfies DeleteCookieResponse);
+        })
+        .catch((error: unknown) => {
+          sendResponse({
+            ok: false,
+            error:
+              error instanceof Error
+                ? `Could not delete cookie: ${error.message}`
+                : "Could not delete the cookie.",
+          } satisfies DeleteCookieResponse);
+        });
+
+      // Keep the message channel open for the async response.
+      return true;
     }
 
     if (request.type === INTERCEPT_CONSOLE_MESSAGE) {

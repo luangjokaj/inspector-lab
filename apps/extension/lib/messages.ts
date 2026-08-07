@@ -41,6 +41,51 @@ export type CapturedConsolePayload = {
   text: string;
 };
 
+export const GET_COOKIES_MESSAGE = "inspector-lab/get-cookies" as const;
+
+/** Asks the background for the cookies visible to the inspector's tab. */
+export type GetCookiesRequest = {
+  type: typeof GET_COOKIES_MESSAGE;
+};
+
+/** One cookie, mirroring the chrome.cookies fields the panel renders. */
+export type CookieEntry = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  /** Unix seconds; absent for session cookies. */
+  expirationDate?: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: "no_restriction" | "lax" | "strict" | "unspecified";
+};
+
+export type GetCookiesResponse = {
+  ok: boolean;
+  cookies: CookieEntry[];
+  error?: string;
+};
+
+export const DELETE_COOKIE_MESSAGE = "inspector-lab/delete-cookie" as const;
+
+/**
+ * Identifies the cookie by the fields chrome.cookies.remove needs to build
+ * its URL. The background still validates the domain against the sender tab.
+ */
+export type DeleteCookieRequest = {
+  type: typeof DELETE_COOKIE_MESSAGE;
+  name: string;
+  domain: string;
+  path: string;
+  secure: boolean;
+};
+
+export type DeleteCookieResponse = {
+  ok: boolean;
+  error?: string;
+};
+
 const CONSOLE_EVENT_PREFIX = "inspector-lab-console:";
 
 /**
