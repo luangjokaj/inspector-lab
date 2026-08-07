@@ -20,6 +20,9 @@ import {
 
 const PREVIEW_LIMIT = 2000;
 
+/** The optional grant that unlocks reading every profile cookie. */
+const ALL_HOSTS = ["http://*/*", "https://*/*"];
+
 /**
  * Runs inside the page's MAIN world via chrome.scripting, so it must be fully
  * self-contained: no imports, no closure over module scope. It evaluates with
@@ -350,22 +353,32 @@ chrome.runtime.onMessage.addListener(
 
       void (async () => {
         try {
+          const scope = request.scope === "all" ? "all" : "site";
           // Report a missing grant explicitly rather than relying on the
           // cookies API failure shape, so the panel can offer the fix.
           const granted = await chrome.permissions.contains({
-            origins: [`${new URL(tabUrl).origin}/*`],
+            origins:
+              scope === "all" ? ALL_HOSTS : [`${new URL(tabUrl).origin}/*`],
           });
           if (!granted) {
             sendResponse({
               ok: false,
               cookies: [],
               granted: false,
-              error: "Cookie access has not been granted for this site.",
+              error:
+                scope === "all"
+                  ? "Access to all sites has not been granted."
+                  : "Cookie access has not been granted for this site.",
             } satisfies GetCookiesResponse);
             return;
           }
 
-          const cookies = await chrome.cookies.getAll({ url: tabUrl });
+          // Unfiltered getAll lists every cookie the grant reaches — the
+          // whole profile for "all", the page's own cookies for "site".
+          const cookies =
+            scope === "all"
+              ? await chrome.cookies.getAll({})
+              : await chrome.cookies.getAll({ url: tabUrl });
           sendResponse({
             ok: true,
             granted: true,
@@ -406,7 +419,10 @@ chrome.runtime.onMessage.addListener(
       void (async () => {
         try {
           const granted = await chrome.permissions.request({
-            origins: [`${new URL(tabUrl).origin}/*`],
+            origins:
+              request.scope === "all"
+                ? ALL_HOSTS
+                : [`${new URL(tabUrl).origin}/*`],
           });
           sendResponse({
             ok: granted,
@@ -438,9 +454,7 @@ chrome.runtime.onMessage.addListener(
         typeof request.path === "string" &&
         request.path.startsWith("/") &&
         typeof request.secure === "boolean" &&
-        host !== "" &&
-        // Never delete cookies the inspector's page could not see itself.
-        cookieVisibleToHost(host, request.domain);
+        host !== "";
       if (!valid) {
         sendResponse({
           ok: false,
@@ -449,23 +463,39 @@ chrome.runtime.onMessage.addListener(
         return;
       }
 
-      const bareDomain = request.domain.replace(/^\./, "");
-      const cookieUrl = `${request.secure ? "https" : "http"}://${bareDomain}${request.path}`;
-      chrome.cookies
-        .remove({ url: cookieUrl, name: request.name })
-        .then((details) => {
+      void (async () => {
+        try {
+          // Cookies the page itself sees are always fair game; anything
+          // beyond that needs the explicit all-sites grant.
+          const allowed =
+            cookieVisibleToHost(host, request.domain) ||
+            (await chrome.permissions.contains({ origins: ALL_HOSTS }));
+          if (!allowed) {
+            sendResponse({
+              ok: false,
+              error: "Cookie deletion rejected.",
+            } satisfies DeleteCookieResponse);
+            return;
+          }
+
+          const bareDomain = request.domain.replace(/^\./, "");
+          const cookieUrl = `${request.secure ? "https" : "http"}://${bareDomain}${request.path}`;
+          const details = await chrome.cookies.remove({
+            url: cookieUrl,
+            name: request.name,
+          });
           sendResponse({
             ok: details !== null,
             error:
               details === null ? "The cookie could not be deleted." : undefined,
           } satisfies DeleteCookieResponse);
-        })
-        .catch((error: unknown) => {
+        } catch (error) {
           sendResponse({
             ok: false,
             error: describeCookieError(error, "delete the cookie"),
           } satisfies DeleteCookieResponse);
-        });
+        }
+      })();
 
       // Keep the message channel open for the async response.
       return true;

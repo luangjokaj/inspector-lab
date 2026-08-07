@@ -42,6 +42,7 @@ import {
   randomConsoleEventName,
   type CapturedConsolePayload,
   type CookieEntry,
+  type CookieScope,
   type DeleteCookieRequest,
   type DeleteCookieResponse,
   type EvaluateRequest,
@@ -281,9 +282,9 @@ async function evaluateExpression(
  * the "cookies" permission); the same dead-runtime caveat as evaluation
  * applies, so failures surface as messages instead of silent empty lists.
  */
-async function loadCookies(): Promise<GetCookiesResponse> {
+async function loadCookies(scope: CookieScope): Promise<GetCookiesResponse> {
   try {
-    const request: GetCookiesRequest = { type: GET_COOKIES_MESSAGE };
+    const request: GetCookiesRequest = { type: GET_COOKIES_MESSAGE, scope };
     const response = (await chrome.runtime.sendMessage(request)) as
       GetCookiesResponse | undefined;
     if (!response || !Array.isArray(response.cookies)) {
@@ -324,10 +325,13 @@ async function deleteCookie(
   }
 }
 
-async function requestCookieAccess(): Promise<RequestCookieAccessResponse> {
+async function requestCookieAccess(
+  scope: CookieScope,
+): Promise<RequestCookieAccessResponse> {
   try {
     const request: RequestCookieAccessRequest = {
       type: REQUEST_COOKIE_ACCESS_MESSAGE,
+      scope,
     };
     const response = (await chrome.runtime.sendMessage(request)) as
       RequestCookieAccessResponse | undefined;

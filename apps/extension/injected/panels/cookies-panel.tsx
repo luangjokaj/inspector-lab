@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import styled from "styled-components";
 import { Button, Icon, IconButton, Input } from "cherry-styled-components";
+import type { CookieScope } from "~lib/messages";
 import {
   DataGrid,
   DevtoolsButtonGroup,
   DevtoolsField,
   EmptyState,
+  GridActionCell,
   GridRow,
   Panel,
   PanelToolbar,
@@ -20,6 +22,11 @@ import type {
   GetCookiesResponse,
   RequestCookieAccessResponse,
 } from "~lib/messages";
+
+const SCOPES: { id: CookieScope; label: string }[] = [
+  { id: "site", label: "This site" },
+  { id: "all", label: "All sites" },
+];
 
 /**
  * DevTools' cookie table needs more room than the inspector window is wide;
@@ -73,56 +80,6 @@ const FlagCell = styled.td`
   text-align: center;
 `;
 
-/**
- * Hover-revealed delete action, restyling the Cherry `IconButton` from the
- * parent the same way `ToolbarControls` does.
- */
-const ActionCell = styled.td`
-  padding: 0;
-
-  button {
-    width: 16px;
-    height: 16px;
-    min-width: 16px;
-    padding: 0;
-    color: ${({ theme }) => theme.devtools.textSubtle};
-    background: transparent;
-    border: none;
-    border-radius: 2px;
-    box-shadow: none;
-    transition: none;
-    opacity: 0;
-
-    svg {
-      width: 11px;
-      height: 11px;
-    }
-
-    &:hover:not(:disabled) {
-      color: ${({ theme }) => theme.devtools.text};
-      background: ${({ theme }) => theme.devtools.tabHoverBackground};
-      border: none;
-      box-shadow: none;
-    }
-
-    &:focus,
-    &:active {
-      border: none;
-      box-shadow: none;
-    }
-
-    &:focus-visible {
-      outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
-      outline-offset: -1px;
-      opacity: 1;
-    }
-  }
-
-  ${GridRow}:hover & button {
-    opacity: 1;
-  }
-`;
-
 /** Shown instead of the table when the per-site grant is missing. */
 const AccessPrompt = styled.div`
   display: flex;
@@ -170,10 +127,10 @@ function cookieKey(cookie: CookieEntry): string {
 }
 
 export type CookiesPanelProps = {
-  loadCookies: () => Promise<GetCookiesResponse>;
+  loadCookies: (scope: CookieScope) => Promise<GetCookiesResponse>;
   deleteCookie: (cookie: CookieEntry) => Promise<DeleteCookieResponse>;
-  /** Prompts for the per-site host permission the cookies API needs. */
-  requestAccess: () => Promise<RequestCookieAccessResponse>;
+  /** Prompts for the host permission the chosen cookie scope needs. */
+  requestAccess: (scope: CookieScope) => Promise<RequestCookieAccessResponse>;
 };
 
 export function CookiesPanel({
@@ -181,18 +138,22 @@ export function CookiesPanel({
   deleteCookie,
   requestAccess,
 }: CookiesPanelProps) {
+  const [scope, setScope] = useState<CookieScope>("site");
   const [cookies, setCookies] = useState<CookieEntry[] | null>(null);
   const [granted, setGranted] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
   const refresh = useCallback(async () => {
-    const response = await loadCookies();
+    const response = await loadCookies(scope);
     setGranted(response.granted !== false);
     if (response.ok) {
       setError(null);
       setCookies(
-        [...response.cookies].sort((a, b) => a.name.localeCompare(b.name)),
+        [...response.cookies].sort(
+          (a, b) =>
+            a.domain.localeCompare(b.domain) || a.name.localeCompare(b.name),
+        ),
       );
     } else {
       // The missing-grant state renders its own prompt, not the error bar.
@@ -203,10 +164,10 @@ export function CookiesPanel({
       );
       setCookies([]);
     }
-  }, [loadCookies]);
+  }, [loadCookies, scope]);
 
   const grantAccess = async () => {
-    const response = await requestAccess();
+    const response = await requestAccess(scope);
     if (response.ok) {
       await refresh();
     } else {
@@ -260,6 +221,21 @@ export function CookiesPanel({
             onChange={(event) => setFilter(event.target.value)}
           />
         </DevtoolsField>
+        <ToolbarDivider />
+        <DevtoolsButtonGroup>
+          {SCOPES.map((entry) => (
+            <Button
+              key={entry.id}
+              type="button"
+              $size="small"
+              $outline
+              aria-pressed={scope === entry.id}
+              onClick={() => setScope(entry.id)}
+            >
+              {entry.label}
+            </Button>
+          ))}
+        </DevtoolsButtonGroup>
       </PanelToolbar>
 
       {error && <ErrorNote role="alert">{error}</ErrorNote>}
@@ -270,13 +246,15 @@ export function CookiesPanel({
         ) : !granted ? (
           <AccessPrompt>
             <p>
-              Chrome needs one-time permission before the inspector can read
-              this site&apos;s cookies. It applies to this site only and is
-              remembered.
+              {scope === "all"
+                ? "Listing cookies from every domain needs Chrome's all-sites permission. Chrome will warn that the extension can read data on all websites."
+                : "Chrome needs one-time permission before the inspector can read this site's cookies. It applies to this site only and is remembered."}
             </p>
             <DevtoolsButtonGroup>
               <Button $size="small" onClick={() => void grantAccess()}>
-                Allow cookie access
+                {scope === "all"
+                  ? "Allow access to all sites"
+                  : "Allow cookie access"}
               </Button>
             </DevtoolsButtonGroup>
           </AccessPrompt>
@@ -318,14 +296,14 @@ export function CookiesPanel({
                   <FlagCell>{cookie.httpOnly ? "✓" : ""}</FlagCell>
                   <FlagCell>{cookie.secure ? "✓" : ""}</FlagCell>
                   <MutedCell>{SAME_SITE_LABELS[cookie.sameSite]}</MutedCell>
-                  <ActionCell>
+                  <GridActionCell>
                     <IconButton
                       aria-label={`Delete cookie ${cookie.name}`}
                       onClick={() => void remove(cookie)}
                     >
                       <Icon name="X" size={11} />
                     </IconButton>
-                  </ActionCell>
+                  </GridActionCell>
                 </GridRow>
               ))}
             </tbody>

@@ -43,9 +43,16 @@ export type CapturedConsolePayload = {
 
 export const GET_COOKIES_MESSAGE = "inspector-lab/get-cookies" as const;
 
+/**
+ * "site" lists the cookies the inspector's page itself receives; "all" lists
+ * every cookie in the profile, which needs the all-sites host grant.
+ */
+export type CookieScope = "site" | "all";
+
 /** Asks the background for the cookies visible to the inspector's tab. */
 export type GetCookiesRequest = {
   type: typeof GET_COOKIES_MESSAGE;
+  scope?: CookieScope;
 };
 
 /** One cookie, mirroring the chrome.cookies fields the panel renders. */
@@ -79,6 +86,7 @@ export const REQUEST_COOKIE_ACCESS_MESSAGE =
  */
 export type RequestCookieAccessRequest = {
   type: typeof REQUEST_COOKIE_ACCESS_MESSAGE;
+  scope?: CookieScope;
 };
 
 export type RequestCookieAccessResponse = {
