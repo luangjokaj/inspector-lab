@@ -71,6 +71,10 @@ The extension lives in `apps/extension` (built with [Plasmo](https://www.plasmo.
 
 Console and network capture from page boot need the per-site grant (elsewhere capture starts at launch), response bodies are recorded for fetch/XHR only (static resources expose headers, not contents), and cross-origin iframes, CSP-blocked `eval`, and protected `chrome://` pages remain out of reach. Some inspections genuinely require the debugger protocol — breakpoints, profiling, CSP bypass — and are out of scope by design. The full list lives at the end of [docs/FEATURES.md](docs/FEATURES.md).
 
+## Privacy
+
+Inspector Lab collects nothing, transmits nothing, and has no servers: no analytics, no telemetry, no crash reporting, no account. Everything it shows is read from the page in front of you and rendered on your device. The only things it stores are your theme preference and which tabs have an inspector open. That is a design constraint, not a default that might drift — see [PRIVACY.md](PRIVACY.md), and hold the code to it.
+
 ## Contributing
 
 Issues and pull requests are welcome. If you are planning a larger change, please open an issue first to talk it through. Keep changes focused, run the checks above, and match the existing code style (Prettier is enforced).

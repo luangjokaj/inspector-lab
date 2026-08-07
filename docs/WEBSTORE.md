@@ -59,7 +59,7 @@ Chrome for Android does not support extensions at all, and Kiwi Browser, the lon
 
 PRIVATE BY DESIGN
 
-The inspector activates only when you click the extension icon on a tab, using the activeTab permission, so it has no standing access to your browsing. Site access for the cookies panel and for staying attached across reloads is optional and requested per site, only when you ask for it. Everything you inspect stays in your browser: the extension has no server, sends no data anywhere, and collects nothing.
+The inspector activates only when you click the extension icon on a tab, using the activeTab permission, so it has no standing access to your browsing. Site access for the cookies panel and for staying attached across reloads is optional and requested per site, only when you ask for it. Everything you inspect stays in your browser: the extension has no server, sends no data anywhere, and collects nothing. There is no analytics, no telemetry, and no crash reporting, and because the whole thing is open source you can verify that rather than take it on trust. Full policy: https://github.com/luangjokaj/inspector-lab/blob/main/PRIVACY.md
 
 OPEN SOURCE
 
@@ -75,8 +75,26 @@ MIT licensed. Source code, feature tour, and issue tracker: https://github.com/l
   pane, cookies panel, the inspector docked on an iPad.
 - Small promo tile (optional): 440x280.
 - Marquee promo tile (optional): 1400x560.
-- Homepage URL: https://github.com/luangjokaj/inspector-lab
-- Support URL: https://github.com/luangjokaj/inspector-lab/issues
+
+### Links the dashboard asks for
+
+Four URL fields, across two tabs. Only the privacy policy is strictly required
+for this extension, but the listing looks abandoned without the other two.
+
+| Field              | Tab     | Status for us                     | Value                                                              |
+| ------------------ | ------- | --------------------------------- | ------------------------------------------------------------------ |
+| **Privacy policy** | Privacy | **Required** (see below)          | `https://github.com/luangjokaj/inspector-lab/blob/main/PRIVACY.md` |
+| Homepage URL       | Listing | Recommended                       | `https://github.com/luangjokaj/inspector-lab`                      |
+| Support URL        | Listing | Recommended                       | `https://github.com/luangjokaj/inspector-lab/issues`               |
+| Official URL       | Listing | Optional, needs a verified domain | none today — see the privacy policy note about `riangle.com`       |
+
+"Official URL" is the one that earns the verified badge on the listing: it can
+only be chosen from domains verified as yours in Google Search Console, so a
+GitHub URL cannot fill it. Skipping it costs the badge and nothing else.
+
+Beyond URLs, the account itself must be publishable: a **verified developer
+contact email** on the Account tab (Google emails compliance notices there and
+an unverified address can block review), and 2FA on the Google account.
 
 ---
 
@@ -176,10 +194,12 @@ Keep it that way — do not let it turn into a pitch to leave Chrome.
 
 > chrome.storage.local stores the user's UI settings only: theme choice
 > (light/dark/system) and the classic-DevTools-style toggle, so the popup and
-> the injected inspector share them. chrome.storage.session keeps per-tab
-> runtime state (which tabs have an open inspector and their headers-only
-> network log) so the inspector and its network panel survive a page reload.
-> No browsing history or page content is persisted.
+> the injected inspector share them. chrome.storage.session keeps two pieces of
+> per-session state: which tabs have an inspector open (tab id to origin), so it
+> can be reattached after a reload, and the panel last used on a given origin.
+> The Network panel's headers-only request log is held in memory in the service
+> worker and never written to storage. No browsing history or page content is
+> persisted.
 
 **cookies**
 
@@ -246,11 +266,32 @@ Certifications at the bottom of the tab, all three apply, check them:
 
 ### Privacy policy URL
 
-Not strictly required while no user data is collected, but the field is
-recommended and some reviews ask for it since the extension can read sensitive
-page data (cookies, request bodies) locally. Easiest path: add a short
-`PRIVACY.md` to the repo stating the above ("all inspection is local, nothing
-is collected or transmitted") and link its GitHub URL here.
+**Required for this extension. Not optional.** An earlier draft of this file
+said otherwise; that was wrong. Google's User Data FAQ is explicit that
+extensions must disclose how they handle user data "even when data is processed
+or stored locally on a user's device and is not transmitted to external servers
+or third parties." This extension reads page content, cookies, request bodies,
+and storage locally, so it handles user data under that definition, and a
+publicly accessible privacy policy URL is required. Enforcement of the updated
+2026 policies began **1 August 2026**, so this is live, not upcoming.
+
+The policy lives in the repo at `PRIVACY.md`. Paste this into the field:
+
+    https://github.com/luangjokaj/inspector-lab/blob/main/PRIVACY.md
+
+It must stay reachable without a login and must keep matching the code. If the
+data handling ever changes, update `PRIVACY.md` in the same commit as the code
+change — the 2026 policy also requires proactively disclosing changes to data
+handling after install.
+
+Optional upgrade: serving the policy from a domain you own (for example
+`riangle.com`) lets the same domain be verified in Google Search Console and
+used as the listing's **Official URL**, which shows a verified badge. GitHub
+works fine without that.
+
+Sources:
+https://developer.chrome.com/docs/webstore/program-policies/user-data-faq and
+https://developer.chrome.com/blog/cws-policy-updates-2026
 
 ---
 
@@ -258,6 +299,12 @@ is collected or transmitted") and link its GitHub URL here.
 
 - **Account tab**: developer contact email must be set and verified, and 2FA
   enabled on the Google account.
+- **Privacy tab complete**: single purpose, a justification for every permission
+  including the optional host permissions, the data-usage answers, all three
+  certifications, and the privacy policy URL. Leaving this tab incomplete gets
+  the item flagged, then suspended after a 30-day warning window.
+- **`PRIVACY.md` still matches the code**: it is a public promise, so re-read it
+  whenever permissions or data flows change.
 - **Distribution tab**: visibility (Public), regions (all), free of charge.
 - **Content rating / mature content**: none, the item contains no mature
   content.
