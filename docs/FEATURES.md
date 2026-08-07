@@ -29,6 +29,8 @@ Inspector Lab - DevTools is a movable, resizable devtools window that lives dire
 - **Captures page logs** — `console.log`, `info`, `warn`, `error`, and `debug` — by wrapping the console in the page's main world. Entries stream over an unguessable per-launch event channel that page scripts cannot spoof or eavesdrop.
 - **Capture from time zero**: on sites where the per-site permission was granted, the wrapper installs at `document_start` before any page script runs, so after a reload the feed includes everything from page boot — early logs are buffered and replayed the moment the inspector opens. Elsewhere, capture starts when the inspector launches.
 - **Evaluate expressions** in the page's own JavaScript context from the prompt, with DevTools-style `›` input and `‹` result rows.
+- **Values colored by type**, like DevTools: numbers, booleans, and null/undefined logged as arguments — and primitive evaluation results, including quoted strings — render in the same syntax palette the Elements tree uses, in every theme. Error and warning rows keep their level color for the whole line, exactly as Chrome does.
+- **Source links**: each captured entry shows the `file:line` it was logged from, right-aligned like DevTools — whenever a page frame can be identified from the call stack.
 - Filter by text or level, clear the feed, and rely on the same 1,000-entry cap DevTools uses.
 - Honest about limits: sites whose Content Security Policy blocks `eval` will say so instead of failing silently.
 
@@ -36,6 +38,7 @@ Inspector Lab - DevTools is a movable, resizable devtools window that lives dire
 
 - **Collapsible file tree** of the page's document, stylesheets, and scripts, organized by host and URL folder like DevTools' navigator.
 - Inline `<style>`/`<script>` content renders in a read-only editor pane.
+- **Syntax highlighting** for HTML, CSS, and JavaScript in the editor, drawn from the same theme syntax palette as the Elements tree, so code reads correctly in all four skins. Unrecognized syntax degrades to plain text — a strange file can never break the pane.
 - **External files load on click**: opening a stylesheet or script fetches its text — never before, and never with credentials. The fetch runs with the page's own authority first (usually straight from the HTTP cache), falling back to the extension's host grants for hosts that block cross-origin reads.
 - Clicking a rule's stylesheet name in the Elements panel opens the file here, expanding and scrolling the tree to it.
 - Guardrails against pathological pages (60 KB / 2,000-line caps per file, truncation flagged in the status bar).

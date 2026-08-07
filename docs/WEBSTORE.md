@@ -36,9 +36,9 @@ Native DevTools live in a separate panel and simply do not exist on most mobile 
 WHAT IT DOES
 
 - Elements: a live DOM Inspector. Pick and highlight elements on the page, inspect the DOM tree, edit HTML attributes and text directly in the tree, edit inline CSS with validation, force element states (hover, active, focus, visited), and read computed styles with a box-model diagram.
-- Console: captures the page's console output (log, warn, error, and friends) and evaluates JavaScript expressions you type, in the page's own context.
+- Console: captures the page's console output (log, warn, error, and friends) with values colored by type and file:line source links, and evaluates JavaScript expressions you type, in the page's own context.
 - Network: records requests live as the page makes them, with method, status, type, timing, headers, and fetch/XHR request and response bodies in a DevTools-style details pane.
-- Sources: lists the page's scripts and stylesheets in a collapsible tree and loads any file's content on demand for reading.
+- Sources: lists the page's scripts and stylesheets in a collapsible tree and loads any file's content on demand for reading, with syntax highlighting for HTML, CSS, and JavaScript.
 - Cookies: view, edit, add, and delete the cookies for the site you are inspecting.
 - Storage: view and edit localStorage and sessionStorage in place.
 - Window management: drag it, resize it, dock it to any edge of the viewport, or let it float. Light and dark themes, plus an optional classic Chrome DevTools look.

@@ -309,9 +309,22 @@ function evaluateInPage(expression: string, limit: number): EvaluateResponse {
     // Indirect eval: global scope, same privileges as any page script.
     const result = (0, eval)(expression);
     const preview = describe(result, 0);
+    // Primitive results carry a tone so the panel can color them by type,
+    // the way DevTools renders evaluation results.
+    const tone =
+      result === null || result === undefined
+        ? ("nullish" as const)
+        : typeof result === "number" || typeof result === "bigint"
+          ? ("number" as const)
+          : typeof result === "boolean"
+            ? ("boolean" as const)
+            : typeof result === "string"
+              ? ("string" as const)
+              : undefined;
     return {
       ok: true,
       preview: preview.length > limit ? `${preview.slice(0, limit)}…` : preview,
+      ...(tone ? { tone } : {}),
     };
   } catch (error) {
     if (

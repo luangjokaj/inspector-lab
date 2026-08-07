@@ -104,6 +104,15 @@ export type ConsoleHookState = {
     }
   };
 
+  /** DevTools colors primitives by type; one tone tag per top-level arg. */
+  const toneOf = (value: unknown): string => {
+    if (value === null || value === undefined) return "nullish";
+    const type = typeof value;
+    if (type === "number" || type === "bigint") return "number";
+    if (type === "boolean") return "boolean";
+    return "text";
+  };
+
   /**
    * Chrome's format specifiers: they apply only when the first argument is a
    * string, each specifier consumes one following argument, unmatched
@@ -111,16 +120,13 @@ export type ConsoleHookState = {
    * appended space-separated. `%c` consumes its CSS argument but styles
    * cannot be rendered in a text-only feed, so it contributes nothing.
    */
-  const format = (args: unknown[]): string => {
-    const first = args[0];
-    if (typeof first !== "string" || !/%[sdifoOc%]/.test(first)) {
-      return args.map((argument) => describe(argument, 0)).join(" ");
-    }
-
-    const rest = args.slice(1);
+  const interpolate = (
+    first: string,
+    rest: unknown[],
+  ): { text: string; consumed: number } => {
     let cursor = 0;
 
-    const formatted = first.replace(/%[sdifoOc%]/g, (specifier) => {
+    const text = first.replace(/%[sdifoOc%]/g, (specifier) => {
       if (specifier === "%%") return "%";
       if (cursor >= rest.length) return specifier;
       const value = rest[cursor++];
@@ -140,18 +146,75 @@ export type ConsoleHookState = {
       return describe(value, 1);
     });
 
-    const leftover = rest
-      .slice(cursor)
-      .map((argument) => describe(argument, 0));
-    return [formatted, ...leftover].join(" ");
+    return { text, consumed: cursor };
+  };
+
+  /**
+   * One toned part per top-level argument, so the panel can color primitives
+   * the way DevTools does. Values interpolated into a format string render
+   * inside it as plain text, exactly like Chrome.
+   */
+  const buildParts = (args: unknown[]): { text: string; tone: string }[] => {
+    const first = args[0];
+    if (typeof first === "string" && /%[sdifoOc%]/.test(first)) {
+      const { text, consumed } = interpolate(first, args.slice(1));
+      return [
+        { text, tone: "text" },
+        ...args.slice(1 + consumed).map((argument) => ({
+          text: describe(argument, 0),
+          tone: toneOf(argument),
+        })),
+      ];
+    }
+    return args.map((argument) => ({
+      text: describe(argument, 0),
+      tone: toneOf(argument),
+    }));
+  };
+
+  /**
+   * `file:line` of the page frame that called console. Only http(s)/file
+   * frames qualify — the wrapper's own frames carry the extension's URL (or
+   * none), so the first page-scheme frame is the caller.
+   */
+  const sourceFrom = (): string | undefined => {
+    try {
+      const stack = new Error().stack;
+      if (!stack) return undefined;
+      for (const frame of stack.split("\n")) {
+        const match =
+          /((?:https?|file):\/\/[^\s()@]+?):(\d+)(?::\d+)?\)?$/.exec(
+            frame.trim(),
+          );
+        if (!match) continue;
+        const path = match[1].split("?")[0].split("#")[0];
+        const name = path.split("/").filter(Boolean).pop() || path;
+        return `${name}:${match[2]}`;
+      }
+    } catch {
+      /* Source attribution is best-effort. */
+    }
+    return undefined;
   };
 
   const forward = (level: string, args: unknown[]) => {
     // A console patch must never be able to break the page.
     try {
-      let text = format(args);
-      if (text.length > TEXT_LIMIT) text = `${text.slice(0, TEXT_LIMIT)}…`;
-      const payload = JSON.stringify({ level, text });
+      const parts = buildParts(args);
+      let text = parts.map((part) => part.text).join(" ");
+      let toned: { text: string; tone: string }[] | undefined = parts;
+      if (text.length > TEXT_LIMIT) {
+        // Pathological entries ship truncated and untoned rather than trying
+        // to slice tone boundaries.
+        text = `${text.slice(0, TEXT_LIMIT)}…`;
+        toned = undefined;
+      }
+      const payload = JSON.stringify({
+        level,
+        text,
+        parts: toned,
+        source: sourceFrom(),
+      });
 
       if (state.eventName) {
         document.dispatchEvent(

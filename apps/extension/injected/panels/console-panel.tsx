@@ -11,6 +11,7 @@ import {
   ToolbarDivider,
   devtoolsMono,
 } from "~injected/devtools.styled";
+import type { ConsolePart, ConsoleTone } from "~lib/messages";
 
 export type ConsoleLevel =
   "log" | "info" | "warning" | "error" | "input" | "result";
@@ -19,6 +20,10 @@ export type ConsoleEntry = {
   id: number;
   level: ConsoleLevel;
   text: string;
+  /** Toned per-argument segments; falls back to `text` when absent. */
+  parts?: ConsolePart[];
+  /** `file:line` call site, shown right-aligned like DevTools. */
+  source?: string;
 };
 
 const MessageList = styled.div`
@@ -80,6 +85,55 @@ const MessageText = styled.span`
   flex: 1 1 auto;
   min-width: 0;
 `;
+
+/**
+ * A primitive value inside a message, colored by type from the syntax
+ * palette the way DevTools renders numbers, booleans, and result strings.
+ */
+const TonedValue = styled.span<{ $tone: ConsoleTone }>`
+  color: ${({ theme, $tone }) =>
+    $tone === "number"
+      ? theme.devtools.syntax.number
+      : $tone === "boolean"
+        ? theme.devtools.syntax.keyword
+        : $tone === "string"
+          ? theme.devtools.syntax.string
+          : $tone === "nullish"
+            ? theme.devtools.textSubtle
+            : "inherit"};
+`;
+
+/** Right-aligned `file:line` call site, like DevTools' source links. */
+const SourceTag = styled.span`
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-size: 10px;
+`;
+
+/**
+ * Error and warning rows keep their level color for the whole line, as
+ * DevTools does; tones only apply on neutral levels.
+ */
+function renderMessage(entry: ConsoleEntry) {
+  const toned =
+    entry.parts &&
+    entry.level !== "error" &&
+    entry.level !== "warning" &&
+    entry.parts.some((part) => part.tone !== "text");
+  if (!toned || !entry.parts) return entry.text;
+  return entry.parts.map((part, index) => (
+    <span key={index}>
+      {index > 0 && " "}
+      {part.tone === "text" ? (
+        part.text
+      ) : (
+        <TonedValue $tone={part.tone}>{part.text}</TonedValue>
+      )}
+    </span>
+  ));
+}
 
 /** The bottom row where expressions are typed. */
 const PromptRow = styled.div`
@@ -186,7 +240,8 @@ export function ConsolePanel({
                 {entry.level === "result" && (
                   <Chevron $direction="out">‹</Chevron>
                 )}
-                <MessageText>{entry.text}</MessageText>
+                <MessageText>{renderMessage(entry)}</MessageText>
+                {entry.source && <SourceTag>{entry.source}</SourceTag>}
               </Message>
             ))}
           </MessageList>

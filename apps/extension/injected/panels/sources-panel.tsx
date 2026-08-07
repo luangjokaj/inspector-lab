@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import styled from "styled-components";
 import { Icon, resetButton } from "cherry-styled-components";
 import {
@@ -13,6 +13,11 @@ import {
   devtoolsMono,
 } from "~injected/devtools.styled";
 import { HOST_ID, STATE_STYLE_ID, truncate } from "~injected/inspector-dom";
+import {
+  tokenizeLines,
+  type SourceLanguage,
+  type SyntaxTone,
+} from "~injected/syntax";
 import {
   FETCH_SOURCE_MESSAGE,
   type FetchSourceRequest,
@@ -210,6 +215,18 @@ const Code = styled.pre`
   font: inherit;
   white-space: pre;
 `;
+
+/** One syntax token, colored straight from the theme's syntax palette. */
+const Tok = styled.span<{ $tone: SyntaxTone }>`
+  color: ${({ theme, $tone }) => theme.devtools.syntax[$tone]};
+`;
+
+/** The editor colors by what the file is, not by sniffing its content. */
+const languageFor: Record<SourceKind, SourceLanguage> = {
+  document: "html",
+  stylesheet: "css",
+  script: "js",
+};
 
 const iconFor: Record<SourceKind, "Globe" | "Palette" | "FileCode"> = {
   document: "Globe",
@@ -505,6 +522,11 @@ export function SourcesPanel({ reveal }: SourcesPanelProps) {
     return displayContent.split("\n").slice(0, MAX_LINES);
   }, [displayContent]);
 
+  const tokenLines = useMemo(
+    () => (selected ? tokenizeLines(lines, languageFor[selected.kind]) : []),
+    [lines, selected],
+  );
+
   return (
     <Panel>
       <SplitView>
@@ -524,7 +546,22 @@ export function SourcesPanel({ reveal }: SourcesPanelProps) {
                 <Gutter aria-hidden="true">
                   {lines.map((_, index) => `${index + 1}`).join("\n")}
                 </Gutter>
-                <Code>{lines.join("\n")}</Code>
+                <Code>
+                  {tokenLines.map((tokens, index) => (
+                    <Fragment key={index}>
+                      {tokens.map((token, tokenIndex) =>
+                        token.tone === "text" ? (
+                          token.text
+                        ) : (
+                          <Tok key={tokenIndex} $tone={token.tone}>
+                            {token.text}
+                          </Tok>
+                        ),
+                      )}
+                      {"\n"}
+                    </Fragment>
+                  ))}
+                </Code>
               </Editor>
             ) : fetched?.state === "error" ? (
               <EmptyState>

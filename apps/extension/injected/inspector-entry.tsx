@@ -652,14 +652,24 @@ function Inspector({ host }: { host: HTMLElement }) {
   const nextEntryId = useRef(1);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const log = useCallback((level: ConsoleLevel, text: string) => {
-    setEntries((current) => {
-      const next = [...current, { id: nextEntryId.current++, level, text }];
-      return next.length > MAX_CONSOLE_ENTRIES
-        ? next.slice(next.length - MAX_CONSOLE_ENTRIES)
-        : next;
-    });
-  }, []);
+  const log = useCallback(
+    (
+      level: ConsoleLevel,
+      text: string,
+      extra?: Pick<ConsoleEntry, "parts" | "source">,
+    ) => {
+      setEntries((current) => {
+        const next = [
+          ...current,
+          { id: nextEntryId.current++, level, text, ...extra },
+        ];
+        return next.length > MAX_CONSOLE_ENTRIES
+          ? next.slice(next.length - MAX_CONSOLE_ENTRIES)
+          : next;
+      });
+    },
+    [],
+  );
 
   /*
    * Console capture: ask the background to patch the page's console in the
@@ -690,7 +700,10 @@ function Inspector({ host }: { host: HTMLElement }) {
             : payload.level === "info"
               ? "info"
               : "log";
-      log(level, payload.text);
+      log(level, payload.text, {
+        parts: payload.parts,
+        source: payload.source,
+      });
     };
 
     document.addEventListener(eventName, onCaptured);
@@ -1581,7 +1594,17 @@ function Inspector({ host }: { host: HTMLElement }) {
             onSubmit={(expression) => {
               log("input", expression);
               void evaluateExpression(expression).then((response) => {
-                log(response.ok ? "result" : "error", response.preview);
+                log(
+                  response.ok ? "result" : "error",
+                  response.preview,
+                  response.ok && response.tone
+                    ? {
+                        parts: [
+                          { text: response.preview, tone: response.tone },
+                        ],
+                      }
+                    : undefined,
+                );
               });
             }}
             onClear={() => setEntries([])}

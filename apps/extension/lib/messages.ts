@@ -12,10 +12,21 @@ export type EvaluateRequest = {
   expression: string;
 };
 
+/**
+ * Tone tag for a serialized console value, mapped onto the theme's syntax
+ * colors by the Console panel — DevTools colors primitives by type.
+ */
+export type ConsoleTone = "text" | "number" | "boolean" | "nullish" | "string";
+
+/** One argument's slice of a console message, carrying its tone. */
+export type ConsolePart = { text: string; tone: ConsoleTone };
+
 export type EvaluateResponse = {
   ok: boolean;
   /** Already-serialized, human-readable preview of the result or error. */
   preview: string;
+  /** Tone of the whole preview, present when the result is a primitive. */
+  tone?: ConsoleTone;
 };
 
 export const INTERCEPT_CONSOLE_MESSAGE =
@@ -39,6 +50,10 @@ export type CapturedConsoleMethod = "log" | "info" | "warn" | "error" | "debug";
 export type CapturedConsolePayload = {
   level: CapturedConsoleMethod;
   text: string;
+  /** Per-argument toned segments; `text` stays the joined fallback. */
+  parts?: ConsolePart[];
+  /** `file:line` of the page call site, when a page frame was identifiable. */
+  source?: string;
 };
 
 export const GET_COOKIES_MESSAGE = "inspector-lab/get-cookies" as const;

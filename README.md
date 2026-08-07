@@ -15,9 +15,9 @@ Highlights:
 - Launches from the extension popup with a user gesture and temporary `activeTab` access — no standing permission to every site.
 - Injects a React + Cherry UI into an isolated Shadow DOM; drags, resizes, and docks to any viewport edge.
 - Picks and highlights elements, edits attributes and text directly in the DOM tree, applies validated inline CSS, and shows computed styles with a box-model diagram.
-- Captures page console output and evaluates expressions in the page context.
+- Captures page console output and evaluates expressions in the page context — with values colored by type and `file:line` source links on every entry.
 - Records network requests live — headers, timing, and fetch/XHR bodies — with a DevTools-style details pane; edits cookies and local/session storage in place.
-- Lists page sources in a collapsible tree, fetching external files on demand.
+- Lists page sources in a collapsible tree with syntax highlighting, fetching external files on demand.
 - Ships in its own theme, light and dark, following the popup's theme toggle — with a one-switch fallback to the classic Chrome DevTools look.
 
 ## Installation
