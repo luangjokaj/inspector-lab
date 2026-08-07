@@ -4,11 +4,14 @@ import {
   EVALUATE_MESSAGE,
   FETCH_SOURCE_MESSAGE,
   GET_COOKIES_MESSAGE,
+  GET_NETWORK_DETAILS_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
+  INTERCEPT_NETWORK_MESSAGE,
   REQUEST_COOKIE_ACCESS_MESSAGE,
   SET_COOKIE_MESSAGE,
   TRACK_INSPECTOR_MESSAGE,
   isConsoleEventName,
+  isNetworkEventName,
   type ClearSiteCookiesRequest,
   type ClearSiteCookiesResponse,
   type CookieDraft,
@@ -22,18 +25,24 @@ import {
   type FetchSourceResponse,
   type GetCookiesResponse,
   type GetCookiesRequest,
+  type GetNetworkDetailsRequest,
+  type GetNetworkDetailsResponse,
   type InterceptConsoleRequest,
   type InterceptConsoleResponse,
+  type InterceptNetworkRequest,
+  type InterceptNetworkResponse,
   type RequestCookieAccessRequest,
   type RequestCookieAccessResponse,
   type SetCookieRequest,
   type SetCookieResponse,
   type TrackInspectorRequest,
   type TrackInspectorResponse,
+  type WebRequestEntry,
 } from "~lib/messages";
 import { readBodyCapped } from "~lib/source-fetch";
 import inspectorBundleUrl from "url:./injected/inspector-entry.tsx";
 import consolePrehookUrl from "url:./injected/console-prehook.ts";
+import networkPrehookUrl from "url:./injected/network-prehook.ts";
 
 const PREVIEW_LIMIT = 2000;
 /** Matches the Sources panel's own per-file display cap. */
@@ -50,6 +59,7 @@ function toExtensionPath(bundleUrl: string): string {
 
 const INSPECTOR_BUNDLE = toExtensionPath(inspectorBundleUrl);
 const CONSOLE_PREHOOK = toExtensionPath(consolePrehookUrl);
+const NETWORK_PREHOOK = toExtensionPath(networkPrehookUrl);
 
 /** storage.session key for a tab whose inspector is open; value = origin. */
 const openTabKey = (tabId: number) => `openTab:${tabId}`;
@@ -79,13 +89,111 @@ async function ensurePrehookRegistered(origin: string): Promise<void> {
   await chrome.scripting.registerContentScripts([
     {
       id,
-      js: [CONSOLE_PREHOOK],
+      js: [CONSOLE_PREHOOK, NETWORK_PREHOOK],
       matches: [`${origin}/*`],
       runAt: "document_start",
       world: "MAIN",
       persistAcrossSessions: false,
     },
   ]);
+}
+
+/**
+ * Mirror of the open-tab set for synchronous checks in webRequest listeners
+ * (storage.session is async). Rehydrated on service-worker start; kept in
+ * sync by the TRACK handler and tabs.onRemoved.
+ */
+const openTabIds = new Set<number>();
+void chrome.storage.session
+  .get(null)
+  .then((all) => {
+    for (const key of Object.keys(all)) {
+      if (key.startsWith("openTab:")) {
+        const tabId = Number(key.slice("openTab:".length));
+        if (Number.isInteger(tabId)) openTabIds.add(tabId);
+      }
+    }
+  })
+  .catch(() => undefined);
+
+/**
+ * Headers-only request log per inspected tab, fed by chrome.webRequest —
+ * covers documents, styles, images, and fonts, which never pass through
+ * fetch/XHR. In-memory: a service-worker restart drops history, which the
+ * panel treats the same as rows that predate the inspector.
+ */
+const webRequestLog = new Map<number, Map<string, WebRequestEntry>>();
+const WEB_REQUEST_CAP = 500;
+
+function tabRequestLog(tabId: number): Map<string, WebRequestEntry> {
+  let log = webRequestLog.get(tabId);
+  if (!log) {
+    log = new Map();
+    webRequestLog.set(tabId, log);
+  }
+  return log;
+}
+
+function headerPairsFrom(
+  headers?: chrome.webRequest.HttpHeader[],
+): [string, string][] {
+  return (headers ?? [])
+    .slice(0, 100)
+    .map((header) => [
+      header.name,
+      header.value ?? (header.binaryValue ? "(binary)" : ""),
+    ]);
+}
+
+if (chrome.webRequest) {
+  chrome.webRequest.onSendHeaders.addListener(
+    (details) => {
+      if (!openTabIds.has(details.tabId)) return;
+      const log = tabRequestLog(details.tabId);
+      log.set(details.requestId, {
+        url: details.url,
+        method: details.method,
+        resourceType: details.type,
+        status: 0,
+        startEpoch: details.timeStamp,
+        duration: 0,
+        fromCache: false,
+        error: null,
+        requestHeaders: headerPairsFrom(details.requestHeaders),
+        responseHeaders: [],
+      });
+      while (log.size > WEB_REQUEST_CAP) {
+        const oldest = log.keys().next().value;
+        if (oldest === undefined) break;
+        log.delete(oldest);
+      }
+    },
+    { urls: ["<all_urls>"] },
+    ["requestHeaders", "extraHeaders"],
+  );
+
+  chrome.webRequest.onCompleted.addListener(
+    (details) => {
+      const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
+      if (!entry) return;
+      entry.status = details.statusCode;
+      entry.responseHeaders = headerPairsFrom(details.responseHeaders);
+      entry.fromCache = details.fromCache;
+      entry.duration = details.timeStamp - entry.startEpoch;
+    },
+    { urls: ["<all_urls>"] },
+    ["responseHeaders", "extraHeaders"],
+  );
+
+  chrome.webRequest.onErrorOccurred.addListener(
+    (details) => {
+      const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
+      if (!entry) return;
+      entry.error = details.error;
+      entry.duration = details.timeStamp - entry.startEpoch;
+    },
+    { urls: ["<all_urls>"] },
+  );
 }
 
 /** Drops an origin's prehook registration once no open tab needs it. */
@@ -124,6 +232,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  openTabIds.delete(tabId);
+  webRequestLog.delete(tabId);
   void (async () => {
     const key = openTabKey(tabId);
     const stored = await chrome.storage.session.get(key);
@@ -236,6 +346,25 @@ function connectConsoleHook(eventName: string): boolean {
   type HookState = { eventName: string | null; buffer: string[] };
   const holder = window as Window & { __inspectorLabConsoleHook?: HookState };
   const state = holder.__inspectorLabConsoleHook;
+  if (!state) return false;
+
+  state.eventName = eventName;
+  const pending = Array.isArray(state.buffer) ? state.buffer.splice(0) : [];
+  for (const detail of pending) {
+    document.dispatchEvent(new CustomEvent(eventName, { detail }));
+  }
+  return true;
+}
+
+/**
+ * Runs in the page's MAIN world. Points the already-installed network hook
+ * (injected/network-prehook.ts) at a fresh event channel and replays
+ * anything buffered before the inspector connected. Self-contained.
+ */
+function connectNetworkHook(eventName: string): boolean {
+  type HookState = { eventName: string | null; buffer: string[] };
+  const holder = window as Window & { __inspectorLabNetworkHook?: HookState };
+  const state = holder.__inspectorLabNetworkHook;
   if (!state) return false;
 
   state.eventName = eventName;
@@ -380,10 +509,14 @@ chrome.runtime.onMessage.addListener(
       | ClearSiteCookiesRequest
       | TrackInspectorRequest
       | FetchSourceRequest
+      | InterceptNetworkRequest
+      | GetNetworkDetailsRequest
       | RequestCookieAccessRequest;
     if (
       request?.type !== EVALUATE_MESSAGE &&
       request?.type !== INTERCEPT_CONSOLE_MESSAGE &&
+      request?.type !== INTERCEPT_NETWORK_MESSAGE &&
+      request?.type !== GET_NETWORK_DETAILS_MESSAGE &&
       request?.type !== GET_COOKIES_MESSAGE &&
       request?.type !== DELETE_COOKIE_MESSAGE &&
       request?.type !== SET_COOKIE_MESSAGE &&
@@ -410,6 +543,11 @@ chrome.runtime.onMessage.addListener(
           cookies: [],
           error: "Request rejected: unknown sender.",
         } satisfies GetCookiesResponse);
+      } else if (request.type === GET_NETWORK_DETAILS_MESSAGE) {
+        sendResponse({
+          ok: false,
+          entries: [],
+        } satisfies GetNetworkDetailsResponse);
       } else {
         sendResponse({ ok: false } satisfies
           | InterceptConsoleResponse
@@ -418,6 +556,7 @@ chrome.runtime.onMessage.addListener(
           | ClearSiteCookiesResponse
           | TrackInspectorResponse
           | FetchSourceResponse
+          | InterceptNetworkResponse
           | RequestCookieAccessResponse);
       }
       return;
@@ -780,6 +919,54 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (request.type === INTERCEPT_NETWORK_MESSAGE) {
+      if (
+        typeof request.eventName !== "string" ||
+        !isNetworkEventName(request.eventName)
+      ) {
+        sendResponse({ ok: false } satisfies InterceptNetworkResponse);
+        return;
+      }
+
+      const eventName = request.eventName;
+      void (async () => {
+        try {
+          // Idempotent: installs the wrapper unless the document_start
+          // registration (or an earlier launch) already has.
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            injectImmediately: true,
+            files: [NETWORK_PREHOOK],
+          });
+          const [injection] = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            injectImmediately: true,
+            func: connectNetworkHook,
+            args: [eventName],
+          });
+          sendResponse({
+            ok: injection?.result === true,
+          } satisfies InterceptNetworkResponse);
+        } catch {
+          sendResponse({ ok: false } satisfies InterceptNetworkResponse);
+        }
+      })();
+
+      // Keep the message channel open for the async response.
+      return true;
+    }
+
+    if (request.type === GET_NETWORK_DETAILS_MESSAGE) {
+      const log = webRequestLog.get(tabId);
+      sendResponse({
+        ok: true,
+        entries: log ? Array.from(log.values()) : [],
+      } satisfies GetNetworkDetailsResponse);
+      return;
+    }
+
     if (request.type === FETCH_SOURCE_MESSAGE) {
       if (
         typeof request.url !== "string" ||
@@ -879,6 +1066,7 @@ chrome.runtime.onMessage.addListener(
               return;
             }
             const origin = new URL(tabUrl).origin;
+            openTabIds.add(tabId);
             await chrome.storage.session.set({ [openTabKey(tabId)]: origin });
             await ensurePrehookRegistered(origin).catch(() => undefined);
 
@@ -901,6 +1089,7 @@ chrome.runtime.onMessage.addListener(
               } satisfies TrackInspectorResponse);
             }
           } else {
+            openTabIds.delete(tabId);
             const key = openTabKey(tabId);
             const stored = await chrome.storage.session.get(key);
             const origin = stored[key] as string | undefined;

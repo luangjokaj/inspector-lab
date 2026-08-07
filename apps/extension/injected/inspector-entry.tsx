@@ -57,12 +57,16 @@ import {
   DELETE_COOKIE_MESSAGE,
   EVALUATE_MESSAGE,
   GET_COOKIES_MESSAGE,
+  GET_NETWORK_DETAILS_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
+  INTERCEPT_NETWORK_MESSAGE,
   REQUEST_COOKIE_ACCESS_MESSAGE,
   SET_COOKIE_MESSAGE,
   TRACK_INSPECTOR_MESSAGE,
   randomConsoleEventName,
+  randomNetworkEventName,
   type CapturedConsolePayload,
+  type CapturedNetworkRequest,
   type ClearSiteCookiesRequest,
   type ClearSiteCookiesResponse,
   type CookieDraft,
@@ -74,14 +78,20 @@ import {
   type EvaluateResponse,
   type GetCookiesRequest,
   type GetCookiesResponse,
+  type GetNetworkDetailsRequest,
+  type GetNetworkDetailsResponse,
   type InterceptConsoleRequest,
   type InterceptConsoleResponse,
+  type InterceptNetworkRequest,
+  type InterceptNetworkResponse,
+  type NetworkCapturePhase,
   type RequestCookieAccessRequest,
   type RequestCookieAccessResponse,
   type SetCookieRequest,
   type SetCookieResponse,
   type TrackInspectorRequest,
   type TrackInspectorResponse,
+  type WebRequestEntry,
 } from "~lib/messages";
 import { ElementsPanel } from "~injected/panels/elements-panel";
 import {
@@ -484,6 +494,82 @@ function trackInspector(
   >;
 }
 
+/** Oldest network captures are dropped past this point, as rows are cheap
+ *  but bodies are not. */
+const MAX_NETWORK_CAPTURES = 500;
+
+/** Folds one phased interceptor payload into the capture list by id. */
+function reduceNetworkCapture(
+  current: CapturedNetworkRequest[],
+  phase: NetworkCapturePhase,
+): CapturedNetworkRequest[] {
+  const index = current.findIndex((entry) => entry.id === phase.id);
+
+  if (phase.phase === "start") {
+    if (index >= 0) return current;
+    const entry: CapturedNetworkRequest = {
+      id: phase.id,
+      source: phase.source ?? "fetch",
+      url: phase.url ?? "",
+      method: phase.method ?? "GET",
+      startTime: phase.startTime ?? 0,
+      requestHeaders: phase.requestHeaders ?? [],
+      requestBody: phase.requestBody ?? null,
+      requestBodyTruncated: phase.requestBodyTruncated === true,
+      status: 0,
+      statusText: "",
+      responseHeaders: [],
+      contentType: "",
+      duration: 0,
+      responseBody: null,
+      responseBodyTruncated: false,
+      pending: true,
+      error: null,
+    };
+    const next = [...current, entry];
+    return next.length > MAX_NETWORK_CAPTURES
+      ? next.slice(next.length - MAX_NETWORK_CAPTURES)
+      : next;
+  }
+
+  if (index < 0) return current;
+  const updated = { ...current[index] };
+  if (phase.phase === "response") {
+    updated.status = phase.status ?? 0;
+    updated.statusText = phase.statusText ?? "";
+    updated.responseHeaders = phase.responseHeaders ?? [];
+    updated.contentType = phase.contentType ?? "";
+    updated.duration = phase.duration ?? 0;
+    updated.pending = false;
+  } else if (phase.phase === "body") {
+    updated.responseBody = phase.responseBody ?? null;
+    updated.responseBodyTruncated = phase.responseBodyTruncated === true;
+  } else {
+    updated.error = phase.error ?? "failed";
+    updated.pending = false;
+    updated.duration = phase.duration ?? updated.duration;
+  }
+  const next = [...current];
+  next[index] = updated;
+  return next;
+}
+
+/** Pulls the background's headers-only webRequest log for this tab. */
+async function loadHeaderDetails(): Promise<WebRequestEntry[]> {
+  try {
+    const request: GetNetworkDetailsRequest = {
+      type: GET_NETWORK_DETAILS_MESSAGE,
+    };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      GetNetworkDetailsResponse | undefined;
+    return response?.ok && Array.isArray(response.entries)
+      ? response.entries
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 async function requestCookieAccess(
   scope: CookieScope,
 ): Promise<RequestCookieAccessResponse> {
@@ -548,6 +634,9 @@ function Inspector({ host }: { host: HTMLElement }) {
   const [sourceReveal, setSourceReveal] = useState<SourceRevealRequest | null>(
     null,
   );
+  const [networkCaptures, setNetworkCaptures] = useState<
+    CapturedNetworkRequest[]
+  >([]);
   /** Bumped on every re-show so the state stylesheet is rebuilt after hide. */
   const [shownTick, setShownTick] = useState(0);
   const revealSeq = useRef(0);
@@ -625,6 +714,53 @@ function Inspector({ host }: { host: HTMLElement }) {
 
     return () => document.removeEventListener(eventName, onCaptured);
   }, [log]);
+
+  /*
+   * Network capture mirrors the console flow: the background installs the
+   * fetch/XHR wrapper in the MAIN world, entries stream over a random
+   * per-launch event channel, and anything buffered before launch (the
+   * document_start registration on granted origins) is replayed on connect.
+   */
+  useEffect(() => {
+    const eventName = randomNetworkEventName();
+
+    const onCaptured = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (typeof detail !== "string") return;
+
+      let phase: NetworkCapturePhase;
+      try {
+        phase = JSON.parse(detail) as NetworkCapturePhase;
+      } catch {
+        return;
+      }
+      if (typeof phase?.id !== "string") return;
+      setNetworkCaptures((current) => reduceNetworkCapture(current, phase));
+    };
+
+    document.addEventListener(eventName, onCaptured);
+
+    const request: InterceptNetworkRequest = {
+      type: INTERCEPT_NETWORK_MESSAGE,
+      eventName,
+    };
+    void (async () => {
+      try {
+        const response = (await chrome.runtime.sendMessage(request)) as
+          InterceptNetworkResponse | undefined;
+        if (!response?.ok) throw new Error("rejected");
+      } catch {
+        log(
+          "warning",
+          "Live network capture is unavailable; the Network tab will show the Performance timeline only.",
+        );
+      }
+    })();
+
+    return () => document.removeEventListener(eventName, onCaptured);
+  }, [log]);
+
+  const clearNetworkCaptures = useCallback(() => setNetworkCaptures([]), []);
 
   useLayoutEffect(() => {
     if (dock === "bottom") {
@@ -1375,7 +1511,13 @@ function Inspector({ host }: { host: HTMLElement }) {
           />
         )}
         {tab === "Sources" && <SourcesPanel reveal={sourceReveal} />}
-        {tab === "Network" && <NetworkPanel />}
+        {tab === "Network" && (
+          <NetworkPanel
+            captured={networkCaptures}
+            onClearCaptured={clearNetworkCaptures}
+            loadHeaderDetails={loadHeaderDetails}
+          />
+        )}
         {tab === "Cookies" && (
           <CookiesPanel
             loadCookies={loadCookies}

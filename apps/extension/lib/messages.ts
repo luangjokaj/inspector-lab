@@ -215,23 +215,127 @@ export type FetchSourceResponse = {
   error?: string;
 };
 
+export const INTERCEPT_NETWORK_MESSAGE =
+  "inspector-lab/intercept-network" as const;
+
+/** Asks the background to install the fetch/XHR interceptor and connect it
+ *  to a per-launch event channel, mirroring the console flow. */
+export type InterceptNetworkRequest = {
+  type: typeof INTERCEPT_NETWORK_MESSAGE;
+  eventName: string;
+};
+
+export type InterceptNetworkResponse = {
+  ok: boolean;
+};
+
+/**
+ * One phased payload from the network interceptor. A request emits `start`,
+ * then `response` and `body` (or `error`); the inspector reduces them by id
+ * so a slow body read never delays the row.
+ */
+export type NetworkCapturePhase = {
+  id: string;
+  phase: "start" | "response" | "body" | "error";
+  source?: "fetch" | "xhr";
+  url?: string;
+  method?: string;
+  startTime?: number;
+  requestHeaders?: [string, string][];
+  requestBody?: string | null;
+  requestBodyTruncated?: boolean;
+  status?: number;
+  statusText?: string;
+  responseHeaders?: [string, string][];
+  contentType?: string;
+  duration?: number;
+  responseBody?: string | null;
+  responseBodyTruncated?: boolean;
+  error?: string;
+};
+
+/** A fully reduced fetch/XHR capture, as the Network panel consumes it. */
+export type CapturedNetworkRequest = {
+  id: string;
+  source: "fetch" | "xhr";
+  url: string;
+  method: string;
+  startTime: number;
+  requestHeaders: [string, string][];
+  requestBody: string | null;
+  requestBodyTruncated: boolean;
+  status: number;
+  statusText: string;
+  responseHeaders: [string, string][];
+  contentType: string;
+  duration: number;
+  responseBody: string | null;
+  responseBodyTruncated: boolean;
+  pending: boolean;
+  error: string | null;
+};
+
+export const GET_NETWORK_DETAILS_MESSAGE =
+  "inspector-lab/get-network-details" as const;
+
+/** Asks the background for the webRequest header log of the sender's tab. */
+export type GetNetworkDetailsRequest = {
+  type: typeof GET_NETWORK_DETAILS_MESSAGE;
+};
+
+/**
+ * Headers-only record of one request observed via chrome.webRequest — the
+ * tier that covers documents, styles, images, and fonts, which never pass
+ * through fetch/XHR. Bodies are not available at this layer in MV3.
+ */
+export type WebRequestEntry = {
+  url: string;
+  method: string;
+  resourceType: string;
+  status: number;
+  /** Epoch ms when the request started. */
+  startEpoch: number;
+  duration: number;
+  fromCache: boolean;
+  error: string | null;
+  requestHeaders: [string, string][];
+  responseHeaders: [string, string][];
+};
+
+export type GetNetworkDetailsResponse = {
+  ok: boolean;
+  entries: WebRequestEntry[];
+};
+
 const CONSOLE_EVENT_PREFIX = "inspector-lab-console:";
+const NETWORK_EVENT_PREFIX = "inspector-lab-network:";
 
 /**
  * The event name doubles as an unguessable channel token: page scripts that
  * never see it can neither eavesdrop on captured entries nor spoof them.
  */
+function randomChannelToken(): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
+}
+
 export function randomConsoleEventName(): string {
-  const token =
-    typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-          byte.toString(16).padStart(2, "0"),
-        ).join("");
-  return `${CONSOLE_EVENT_PREFIX}${token}`;
+  return `${CONSOLE_EVENT_PREFIX}${randomChannelToken()}`;
 }
 
 /** Background-side check that a requested event name is one of ours. */
 export function isConsoleEventName(value: string): boolean {
   return /^inspector-lab-console:[0-9a-f-]{32,36}$/.test(value);
+}
+
+export function randomNetworkEventName(): string {
+  return `${NETWORK_EVENT_PREFIX}${randomChannelToken()}`;
+}
+
+/** Background-side check that a requested event name is one of ours. */
+export function isNetworkEventName(value: string): boolean {
+  return /^inspector-lab-network:[0-9a-f-]{32,36}$/.test(value);
 }

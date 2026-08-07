@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import styled from "styled-components";
 import { Button, Icon, IconButton, Input } from "cherry-styled-components";
 import {
@@ -7,28 +7,44 @@ import {
   DevtoolsField,
   EmptyState,
   GridRow,
+  PaneHeader,
   Panel,
   PanelToolbar,
   Scroller,
+  SplitMain,
+  SplitSidebar,
+  SplitView,
   StatusBar,
+  SubTab,
+  SubTabBar,
   ToolbarControls,
   ToolbarDivider,
+  devtoolsMono,
 } from "~injected/devtools.styled";
+import type { CapturedNetworkRequest, WebRequestEntry } from "~lib/messages";
 
 type RequestKind =
   "document" | "stylesheet" | "script" | "img" | "font" | "fetch" | "other";
 
-type NetworkRequest = {
+/** One table row, merged from whichever capture tiers saw the request. */
+type NetworkRow = {
   id: string;
   name: string;
   url: string;
+  method: string;
   status: string;
+  failed: boolean;
+  pending: boolean;
   type: RequestKind;
   transferSize: number;
   sizeLabel: string;
   duration: number;
   startTime: number;
   cached: boolean;
+  /** Full fetch/XHR capture (headers + bodies), when the wrapper saw it. */
+  detail: CapturedNetworkRequest | null;
+  /** Headers-only webRequest record, when the background saw it. */
+  headers: WebRequestEntry | null;
 };
 
 const FILTERS: { id: RequestKind | "all"; label: string }[] = [
@@ -74,6 +90,67 @@ const MutedCell = styled.td`
   color: ${({ theme }) => theme.devtools.textSubtle};
 `;
 
+/* ------------------------------------------------------------ detail pane */
+
+const DetailSidebar = styled(SplitSidebar)`
+  width: 300px;
+`;
+
+const DetailPaneHeader = styled(PaneHeader)`
+  justify-content: space-between;
+  border-bottom: none;
+`;
+
+const DetailSection = styled.div`
+  padding: 4px 6px;
+  border-bottom: solid 1px ${({ theme }) => theme.devtools.border};
+`;
+
+const DetailSectionTitle = styled.div`
+  margin-bottom: 2px;
+  color: ${({ theme }) => theme.devtools.text};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  font-weight: 500;
+`;
+
+const DetailRow = styled.div`
+  ${devtoolsMono};
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding-left: 8px;
+`;
+
+const DetailName = styled.span`
+  flex: 0 0 auto;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+`;
+
+const DetailValue = styled.span`
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: ${({ theme }) => theme.devtools.text};
+`;
+
+const DetailNote = styled.div`
+  padding: 8px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  font-style: italic;
+`;
+
+const BodyPre = styled.pre`
+  ${devtoolsMono};
+  margin: 0;
+  padding: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+`;
+
 function classify(initiatorType: string, url: string): RequestKind {
   if (initiatorType === "navigation" || initiatorType === "iframe") {
     return "document";
@@ -109,6 +186,19 @@ function nameFrom(url: string): string {
   }
 }
 
+type PerfRequest = {
+  id: string;
+  name: string;
+  url: string;
+  status: string;
+  type: RequestKind;
+  transferSize: number;
+  sizeLabel: string;
+  duration: number;
+  startTime: number;
+  cached: boolean;
+};
+
 /**
  * Reads what the browser already recorded through the Performance timeline.
  * These are real requests for the page, not fabricated rows — but they are a
@@ -118,7 +208,7 @@ function nameFrom(url: string): string {
  * performance.clearResourceTimings(), which would wipe the page's own timing
  * buffer: entries recorded up to that timestamp are simply no longer listed.
  */
-function collectRequests(clearedBefore: number): NetworkRequest[] {
+function collectRequests(clearedBefore: number): PerfRequest[] {
   const timings = [
     ...performance.getEntriesByType("navigation"),
     ...performance.getEntriesByType("resource"),
@@ -146,23 +236,61 @@ function collectRequests(clearedBefore: number): NetworkRequest[] {
         duration: entry.duration,
         startTime: entry.startTime,
         cached,
-      } satisfies NetworkRequest;
+      } satisfies PerfRequest;
     })
     .sort((a, b) => a.startTime - b.startTime);
 }
 
-export function NetworkPanel() {
+/** Nearest webRequest record for a URL, within a tolerance window. */
+function matchWebEntry(
+  entries: WebRequestEntry[],
+  url: string,
+  startTime: number,
+): WebRequestEntry | null {
+  const targetEpoch = performance.timeOrigin + startTime;
+  let best: WebRequestEntry | null = null;
+  let bestDelta = 3000;
+  for (const entry of entries) {
+    if (entry.url !== url) continue;
+    const delta = Math.abs(entry.startEpoch - targetEpoch);
+    if (delta < bestDelta) {
+      best = entry;
+      bestDelta = delta;
+    }
+  }
+  return best;
+}
+
+/** Pretty-prints JSON bodies the way DevTools' Preview tab does. */
+function formatBody(body: string, contentType: string): string {
+  if (!contentType.includes("json")) return body;
+  try {
+    return JSON.stringify(JSON.parse(body), null, 2);
+  } catch {
+    return body;
+  }
+}
+
+export type NetworkPanelProps = {
+  /** Live fetch/XHR captures from the page-world interceptor. */
+  captured: CapturedNetworkRequest[];
+  onClearCaptured: () => void;
+  /** Pulls the background's headers-only webRequest log for this tab. */
+  loadHeaderDetails: () => Promise<WebRequestEntry[]>;
+};
+
+export function NetworkPanel({
+  captured,
+  onClearCaptured,
+  loadHeaderDetails,
+}: NetworkPanelProps) {
   const [generation, setGeneration] = useState(0);
   const [filter, setFilter] = useState("");
   const [kind, setKind] = useState<RequestKind | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [clearedBefore, setClearedBefore] = useState(0);
-
-  const requests = useMemo(
-    () => collectRequests(clearedBefore),
-    // Re-read the timeline when the user asks for a refresh.
-    [generation, clearedBefore],
-  );
+  const [webEntries, setWebEntries] = useState<WebRequestEntry[]>([]);
+  const [detailTab, setDetailTab] = useState<"headers" | "response">("headers");
 
   const refresh = useCallback(() => setGeneration((n) => n + 1), []);
 
@@ -170,9 +298,91 @@ export function NetworkPanel() {
   const clear = useCallback(() => {
     setClearedBefore(performance.now());
     setSelectedId(null);
-  }, []);
+    onClearCaptured();
+  }, [onClearCaptured]);
 
-  const visible = requests.filter((request) => {
+  /* Header details come from the background; re-pull on every refresh. */
+  useEffect(() => {
+    let cancelled = false;
+    void loadHeaderDetails().then((entries) => {
+      if (!cancelled) setWebEntries(entries);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadHeaderDetails, generation]);
+
+  const rows = useMemo((): NetworkRow[] => {
+    const capturedRows: NetworkRow[] = captured
+      .filter((entry) => entry.startTime > clearedBefore)
+      .map((entry) => ({
+        id: `cap-${entry.id}`,
+        name: nameFrom(entry.url),
+        url: entry.url,
+        method: entry.method,
+        status: entry.error
+          ? "failed"
+          : entry.pending
+            ? "…"
+            : String(entry.status),
+        failed: Boolean(entry.error) || (!entry.pending && entry.status >= 400),
+        pending: entry.pending,
+        type: "fetch",
+        transferSize: entry.responseBody?.length ?? 0,
+        sizeLabel: entry.responseBody
+          ? `${formatBytes(entry.responseBody.length)}${entry.responseBodyTruncated ? "+" : ""}`
+          : "—",
+        duration: entry.duration,
+        startTime: entry.startTime,
+        cached: false,
+        detail: entry,
+        headers: matchWebEntry(webEntries, entry.url, entry.startTime),
+      }));
+
+    // The Performance timeline also records fetch/XHR; keep its rows only
+    // when the live wrapper did not see the request (e.g. pre-launch).
+    const perfRows: NetworkRow[] = collectRequests(clearedBefore)
+      .filter(
+        (entry) =>
+          entry.type !== "fetch" ||
+          !capturedRows.some(
+            (row) =>
+              row.url === entry.url &&
+              Math.abs(row.startTime - entry.startTime) < 2500,
+          ),
+      )
+      .map((entry) => {
+        const web = matchWebEntry(webEntries, entry.url, entry.startTime);
+        return {
+          id: entry.id,
+          name: entry.name,
+          url: entry.url,
+          method: web?.method ?? "GET",
+          status: web?.error
+            ? "failed"
+            : web?.status
+              ? String(web.status)
+              : entry.status,
+          failed: Boolean(web?.error) || (!web && entry.status === "—"),
+          pending: false,
+          type: entry.type,
+          transferSize: entry.transferSize,
+          sizeLabel: entry.sizeLabel,
+          duration: entry.duration,
+          startTime: entry.startTime,
+          cached: entry.cached || (web?.fromCache ?? false),
+          detail: null,
+          headers: web,
+        };
+      });
+
+    return [...capturedRows, ...perfRows].sort(
+      (a, b) => a.startTime - b.startTime,
+    );
+    // generation re-reads the Performance timeline on refresh clicks.
+  }, [captured, webEntries, clearedBefore, generation]);
+
+  const visible = rows.filter((request) => {
     if (kind !== "all" && request.type !== kind) return false;
     if (
       filter.trim() &&
@@ -183,6 +393,13 @@ export function NetworkPanel() {
     return true;
   });
 
+  const selectedRow = visible.find((row) => row.id === selectedId) ?? null;
+
+  const selectRow = (id: string) => {
+    setSelectedId((current) => (current === id ? null : id));
+    setDetailTab("headers");
+  };
+
   const transferred = visible.reduce(
     (total, request) => total + request.transferSize,
     0,
@@ -190,6 +407,25 @@ export function NetworkPanel() {
   const finish = visible.reduce(
     (latest, request) => Math.max(latest, request.startTime + request.duration),
     0,
+  );
+
+  const detailHeaders = (
+    title: string,
+    pairs: [string, string][],
+  ): React.ReactNode => (
+    <DetailSection>
+      <DetailSectionTitle>{title}</DetailSectionTitle>
+      {pairs.length === 0 ? (
+        <DetailNote>Not captured for this request.</DetailNote>
+      ) : (
+        pairs.map(([name, value], index) => (
+          <DetailRow key={`${name}-${index}`}>
+            <DetailName>{name}:</DetailName>
+            <DetailValue>{value}</DetailValue>
+          </DetailRow>
+        ))
+      )}
+    </DetailSection>
   );
 
   return (
@@ -231,50 +467,195 @@ export function NetworkPanel() {
         </DevtoolsButtonGroup>
       </PanelToolbar>
 
-      <Scroller>
-        {visible.length === 0 ? (
-          <EmptyState>
-            {clearedBefore > 0
-              ? "Request list cleared. New requests appear after a refresh."
-              : "No requests recorded. Reload the page with the inspector open, then refresh this list."}
-          </EmptyState>
-        ) : (
-          <RequestGrid>
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Status</th>
-                <th scope="col">Type</th>
-                <th scope="col">Size</th>
-                <th scope="col">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((request) => (
-                <GridRow
-                  key={request.id}
-                  $selected={request.id === selectedId}
-                  onClick={() => setSelectedId(request.id)}
-                >
-                  <NameCell title={request.url}>{request.name}</NameCell>
-                  <StatusCell $failed={request.status === "—"}>
-                    {request.status}
-                  </StatusCell>
-                  <MutedCell>{request.type}</MutedCell>
-                  <MutedCell>{request.sizeLabel}</MutedCell>
-                  <MutedCell>{Math.round(request.duration)} ms</MutedCell>
-                </GridRow>
-              ))}
-            </tbody>
-          </RequestGrid>
-        )}
-      </Scroller>
+      <SplitView>
+        <SplitMain>
+          <Scroller>
+            {visible.length === 0 ? (
+              <EmptyState>
+                {clearedBefore > 0
+                  ? "Request list cleared. New requests appear as the page makes them."
+                  : "No requests recorded. Reload the page with the inspector open, then refresh this list."}
+              </EmptyState>
+            ) : (
+              <RequestGrid>
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((request) => (
+                    <GridRow
+                      key={request.id}
+                      $selected={request.id === selectedId}
+                      onClick={() => selectRow(request.id)}
+                    >
+                      <NameCell title={request.url}>{request.name}</NameCell>
+                      <StatusCell $failed={request.failed}>
+                        {request.status}
+                      </StatusCell>
+                      <MutedCell>{request.type}</MutedCell>
+                      <MutedCell>{request.sizeLabel}</MutedCell>
+                      <MutedCell>
+                        {request.pending
+                          ? "…"
+                          : `${Math.round(request.duration)} ms`}
+                      </MutedCell>
+                    </GridRow>
+                  ))}
+                </tbody>
+              </RequestGrid>
+            )}
+          </Scroller>
+          <StatusBar>
+            <span>{visible.length} requests</span>
+            <span>{formatBytes(transferred)} transferred</span>
+            <span>Finish: {Math.round(finish)} ms</span>
+          </StatusBar>
+        </SplitMain>
 
-      <StatusBar>
-        <span>{visible.length} requests</span>
-        <span>{formatBytes(transferred)} transferred</span>
-        <span>Finish: {Math.round(finish)} ms</span>
-      </StatusBar>
+        {selectedRow && (
+          <DetailSidebar>
+            <DetailPaneHeader>
+              <span title={selectedRow.url}>{selectedRow.name}</span>
+              <ToolbarControls>
+                <IconButton
+                  aria-label="Close request details"
+                  onClick={() => setSelectedId(null)}
+                >
+                  <Icon name="X" size={12} />
+                </IconButton>
+              </ToolbarControls>
+            </DetailPaneHeader>
+            <SubTabBar role="tablist" aria-label="Request details">
+              <SubTab
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "headers"}
+                $selected={detailTab === "headers"}
+                onClick={() => setDetailTab("headers")}
+              >
+                Headers
+              </SubTab>
+              <SubTab
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "response"}
+                $selected={detailTab === "response"}
+                onClick={() => setDetailTab("response")}
+              >
+                Response
+              </SubTab>
+            </SubTabBar>
+            <Scroller>
+              {detailTab === "headers" ? (
+                <>
+                  <DetailSection>
+                    <DetailSectionTitle>General</DetailSectionTitle>
+                    <DetailRow>
+                      <DetailName>URL:</DetailName>
+                      <DetailValue>{selectedRow.url}</DetailValue>
+                    </DetailRow>
+                    <DetailRow>
+                      <DetailName>Method:</DetailName>
+                      <DetailValue>{selectedRow.method}</DetailValue>
+                    </DetailRow>
+                    <DetailRow>
+                      <DetailName>Status:</DetailName>
+                      <DetailValue>
+                        {selectedRow.detail?.error ??
+                          selectedRow.headers?.error ??
+                          `${selectedRow.status}${
+                            selectedRow.detail?.statusText
+                              ? ` ${selectedRow.detail.statusText}`
+                              : ""
+                          }`}
+                      </DetailValue>
+                    </DetailRow>
+                    <DetailRow>
+                      <DetailName>Duration:</DetailName>
+                      <DetailValue>
+                        {selectedRow.pending
+                          ? "pending"
+                          : `${Math.round(selectedRow.duration)} ms`}
+                      </DetailValue>
+                    </DetailRow>
+                    {selectedRow.detail?.contentType && (
+                      <DetailRow>
+                        <DetailName>Content-Type:</DetailName>
+                        <DetailValue>
+                          {selectedRow.detail.contentType}
+                        </DetailValue>
+                      </DetailRow>
+                    )}
+                    {selectedRow.cached && (
+                      <DetailRow>
+                        <DetailName>Cache:</DetailName>
+                        <DetailValue>served from cache</DetailValue>
+                      </DetailRow>
+                    )}
+                  </DetailSection>
+                  {detailHeaders(
+                    "Request Headers",
+                    selectedRow.detail?.requestHeaders.length
+                      ? selectedRow.detail.requestHeaders
+                      : (selectedRow.headers?.requestHeaders ?? []),
+                  )}
+                  {detailHeaders(
+                    "Response Headers",
+                    selectedRow.detail?.responseHeaders.length
+                      ? selectedRow.detail.responseHeaders
+                      : (selectedRow.headers?.responseHeaders ?? []),
+                  )}
+                  {selectedRow.detail?.requestBody && (
+                    <DetailSection>
+                      <DetailSectionTitle>
+                        Request Body
+                        {selectedRow.detail.requestBodyTruncated
+                          ? " (truncated)"
+                          : ""}
+                      </DetailSectionTitle>
+                      <BodyPre>{selectedRow.detail.requestBody}</BodyPre>
+                    </DetailSection>
+                  )}
+                </>
+              ) : selectedRow.detail ? (
+                selectedRow.detail.responseBody === null ? (
+                  <DetailNote>
+                    {selectedRow.detail.pending
+                      ? "Waiting for the response…"
+                      : "The response body could not be captured."}
+                  </DetailNote>
+                ) : (
+                  <>
+                    {selectedRow.detail.responseBodyTruncated && (
+                      <DetailNote>
+                        Body truncated to the capture limit.
+                      </DetailNote>
+                    )}
+                    <BodyPre>
+                      {formatBody(
+                        selectedRow.detail.responseBody,
+                        selectedRow.detail.contentType,
+                      )}
+                    </BodyPre>
+                  </>
+                )
+              ) : (
+                <DetailNote>
+                  Response bodies are captured for fetch/XHR requests only —
+                  this row was observed at the browser layer, which exposes
+                  headers but not contents.
+                </DetailNote>
+              )}
+            </Scroller>
+          </DetailSidebar>
+        )}
+      </SplitView>
     </Panel>
   );
 }

@@ -33,7 +33,8 @@
       "activeTab",
       "cookies",
       "scripting",
-      "storage"
+      "storage",
+      "webRequest"
     ],
     "optional_host_permissions": [
       "http://*/*",
