@@ -17,8 +17,12 @@ import { ThemeProvider } from "~lib/ThemeProvider";
 import "./popup.css";
 
 const PopupShell = styled.main`
+  display: flex;
+  flex-direction: column;
+  /* padding.xs and gridGap.xs are both 20px: one rhythm everywhere, and the
+     popup hugs its content — no forced min-height. */
+  gap: ${({ theme }) => theme.spacing.gridGap.xs};
   width: 100%;
-  min-height: 440px;
   padding: ${({ theme }) => theme.spacing.padding.xs};
   box-sizing: border-box;
   color: ${({ theme }) => theme.colors.dark};
@@ -55,14 +59,14 @@ const Title = styled.h1`
 
 const Description = styled.p`
   ${({ theme }) => styledText(theme)};
-  margin: ${({ theme }) => theme.spacing.gridGap.xs} 0;
+  margin: 0;
   color: ${({ theme }) => theme.colors.grayDark};
 `;
 
 const FeatureList = styled.ul`
   display: grid;
   gap: ${({ theme }) => theme.spacing.radius.xs};
-  margin: 0 0 ${({ theme }) => theme.spacing.gridGap.xs};
+  margin: 0;
   padding: 0;
   list-style: none;
 `;
