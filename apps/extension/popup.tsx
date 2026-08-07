@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import styled from "styled-components";
 import {
   Button,
@@ -6,6 +6,7 @@ import {
   Flex,
   Icon,
   ThemeToggle,
+  Toggle,
   alpha,
   styledH5,
   styledSmall,
@@ -13,6 +14,7 @@ import {
 } from "cherry-styled-components";
 import inspectorBundleUrl from "url:./injected/inspector-entry.tsx";
 import { ThemeProvider } from "~lib/ThemeProvider";
+import { readCustomThemeSetting, saveCustomThemeSetting } from "~lib/settings";
 
 import "./popup.css";
 
@@ -118,6 +120,20 @@ async function requestCookieAccess(tabUrl: string): Promise<boolean> {
 function Popup() {
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
   const [message, setMessage] = useState("");
+  const [customTheme, setCustomTheme] = useState(false);
+
+  useEffect(() => {
+    void readCustomThemeSetting().then(setCustomTheme);
+  }, []);
+
+  /* Optimistic flip; an open inspector rethemes live via storage.onChanged. */
+  function onCustomThemeChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const enabled = event.target.checked;
+    setCustomTheme(enabled);
+    void saveCustomThemeSetting(enabled).then((saved) => {
+      if (!saved) setCustomTheme(!enabled);
+    });
+  }
 
   async function launchInspector() {
     setLaunchState("loading");
@@ -188,7 +204,7 @@ function Popup() {
 
         <Description>
           Drop a lightweight inspector over the current page. Move it, resize
-          it, and point at any element without opening browser DevTools.
+          it, and point at any element to inspect it right where it lives.
         </Description>
 
         <FeatureList>
@@ -203,6 +219,13 @@ function Popup() {
             elements
           </Feature>
         </FeatureList>
+
+        <Toggle
+          id="inspector-custom-theme"
+          $label="Use custom inspector theme"
+          checked={customTheme}
+          onChange={onCustomThemeChange}
+        />
 
         <Button
           $fullWidth

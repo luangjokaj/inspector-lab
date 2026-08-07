@@ -1,19 +1,24 @@
 import {
   theme as base,
   themeDark as baseDark,
+  alpha,
+  shade,
+  tint,
   type Theme,
 } from "cherry-styled-components";
 
 /**
- * Design tokens for the in-page inspector, which deliberately mirrors Chrome
- * DevTools rather than the Cherry look used by the popup. They live on the
- * theme (instead of being hardcoded in the components) so both modes stay in
- * one place and every DevTools surface reads the same values.
+ * Design tokens for the in-page inspector. By default it deliberately mirrors
+ * Chrome DevTools rather than the Cherry look used by the popup; the popup's
+ * "custom inspector theme" toggle swaps in `brandDevtools`, the same layout
+ * recolored with the extension's own palette. Tokens live on the theme
+ * (instead of being hardcoded in the components) so every mode and skin stays
+ * in one place and every DevTools surface reads the same values.
  *
- * Values follow Chrome's own DevTools front-end (devtools-frontend@main with
- * the default `baseline-grayscale` theme, var() chains fully resolved): light
- * toolbar #ececec / divider #e3e3e3 / primary #0b57d0, dark toolbar #3c3c3c /
- * divider #5e5e5e / primary #a8c7fa.
+ * Default values follow Chrome's own DevTools front-end (devtools-frontend@
+ * main with the default `baseline-grayscale` theme, var() chains fully
+ * resolved): light toolbar #ececec / divider #e3e3e3 / primary #0b57d0, dark
+ * toolbar #3c3c3c / divider #5e5e5e / primary #a8c7fa.
  */
 export interface DevtoolsTokens {
   /** UI chrome: toolbars, tabs, labels. Small system sans, like DevTools. */
@@ -257,46 +262,153 @@ const devtoolsDark: DevtoolsTokens = {
   },
 };
 
+const brandColorsLight: Theme["colors"] = {
+  ...base.colors,
+  primaryLight: "#A8E8E0",
+  primary: "#087F75",
+  primaryDark: "#045E57",
+  secondaryLight: "#F7DDA7",
+  secondary: "#9A6400",
+  secondaryDark: "#714A00",
+};
+
+const brandColorsDark: Theme["colors"] = {
+  ...baseDark.colors,
+  primaryLight: "#8FF5E9",
+  primary: "#2ED3C3",
+  primaryDark: "#74E9DD",
+  secondaryLight: "#FFE1A3",
+  secondary: "#F2B84B",
+  secondaryDark: "#FFD47C",
+  grayLight: "#202B2A",
+  gray: "#485957",
+  grayDark: "#91A19F",
+  light: "#0A0E0E",
+};
+
+const brandFonts = {
+  head: '"IBM Plex Sans Condensed", "Arial Narrow", sans-serif',
+  text: '"IBM Plex Sans", sans-serif',
+  mono: '"IBM Plex Mono", "SFMono-Regular", monospace',
+};
+
+/** Opaque blend of `color` into `into` — alpha() flattened onto a base, so
+ *  the result is safe for sticky headers and other stacked surfaces. */
+const mix = (color: string, percent: number, into: string) =>
+  `color-mix(in srgb, ${color} ${percent}%, ${into})`;
+
+/**
+ * The optional branded skin: the same DevTools layout recolored with the
+ * extension's Cherry palette (teal primary, amber secondary). Everything
+ * derives from the palette — no free-floating hex — so the popup and the
+ * inspector can never drift apart. Metrics stay identical to the default
+ * skin; only color changes. The box-model pastels are kept from Chrome:
+ * margin-orange / padding-green carry meaning users already know.
+ */
+function brandDevtools(
+  colors: Theme["colors"],
+  isDark: boolean,
+): DevtoolsTokens {
+  /** Status hues are shared across modes; ink them toward the surface's
+   *  opposite pole so 11px text stays readable. */
+  const statusInk = (color: string) =>
+    isDark ? tint(color, 30) : shade(color, 30);
+
+  return {
+    ...devtoolsMetrics,
+
+    surface: colors.light,
+    surfaceSubtle: mix(colors.dark, isDark ? 4 : 3, colors.light),
+    toolbar: isDark ? colors.grayLight : mix(colors.primary, 8, colors.light),
+    border: isDark ? colors.gray : colors.grayLight,
+    borderStrong: isDark ? colors.grayDark : colors.gray,
+
+    text: colors.dark,
+    textSubtle: colors.grayDark,
+    textDisabled: colors.gray,
+    accent: colors.primary,
+    accentSubtle: alpha(colors.primary, isDark ? 15 : 10),
+    focusRing: colors.primary,
+
+    tabText: colors.grayDark,
+    tabSelectedText: colors.primary,
+    tabHoverBackground: alpha(colors.dark, isDark ? 10 : 6),
+    tabIndicator: colors.primary,
+
+    rowHover: alpha(colors.dark, isDark ? 10 : 6),
+    rowSelected: isDark
+      ? mix(colors.primary, 30, colors.light)
+      : mix(colors.primaryLight, 55, colors.light),
+    rowSelectedBlur: isDark
+      ? colors.grayLight
+      : mix(colors.dark, 7, colors.light),
+    rowStripe: mix(colors.dark, isDark ? 4 : 3, colors.light),
+
+    scrollbarThumb: alpha(colors.dark, 30),
+    scrollbarThumbHover: alpha(colors.dark, 45),
+
+    highlightFill: alpha(colors.primary, 40),
+    highlightBorder: alpha(colors.secondaryLight, 90),
+
+    syntax: {
+      tag: colors.primary,
+      attributeName: colors.secondary,
+      attributeValue: colors.primaryDark,
+      text: colors.dark,
+      comment: colors.grayDark,
+      doctype: colors.gray,
+      punctuation: colors.grayDark,
+      property: colors.primary,
+      value: colors.primaryDark,
+      number: statusInk(colors.info),
+      string: colors.secondaryDark,
+      keyword: colors.primary,
+    },
+
+    status: {
+      error: statusInk(colors.error),
+      errorBackground: mix(colors.error, isDark ? 12 : 8, colors.light),
+      errorBorder: mix(colors.error, isDark ? 35 : 25, colors.light),
+      warning: statusInk(colors.warning),
+      warningBackground: mix(colors.warning, 12, colors.light),
+      warningBorder: mix(colors.warning, 35, colors.light),
+      info: statusInk(colors.info),
+      success: statusInk(colors.success),
+    },
+  };
+}
+
 export const theme: AppTheme = {
   ...base,
-  colors: {
-    ...base.colors,
-    primaryLight: "#A8E8E0",
-    primary: "#087F75",
-    primaryDark: "#045E57",
-    secondaryLight: "#F7DDA7",
-    secondary: "#9A6400",
-    secondaryDark: "#714A00",
-  },
-  fonts: {
-    ...base.fonts,
-    head: '"IBM Plex Sans Condensed", "Arial Narrow", sans-serif',
-    text: '"IBM Plex Sans", sans-serif',
-    mono: '"IBM Plex Mono", "SFMono-Regular", monospace',
-  },
+  colors: brandColorsLight,
+  fonts: { ...base.fonts, ...brandFonts },
   devtools: devtoolsLight,
 };
 
 export const themeDark: AppTheme = {
   ...baseDark,
-  colors: {
-    ...baseDark.colors,
-    primaryLight: "#8FF5E9",
-    primary: "#2ED3C3",
-    primaryDark: "#74E9DD",
-    secondaryLight: "#FFE1A3",
-    secondary: "#F2B84B",
-    secondaryDark: "#FFD47C",
-    grayLight: "#202B2A",
-    gray: "#485957",
-    grayDark: "#91A19F",
-    light: "#0A0E0E",
-  },
-  fonts: {
-    ...baseDark.fonts,
-    head: '"IBM Plex Sans Condensed", "Arial Narrow", sans-serif',
-    text: '"IBM Plex Sans", sans-serif',
-    mono: '"IBM Plex Mono", "SFMono-Regular", monospace',
-  },
+  colors: brandColorsDark,
+  fonts: { ...baseDark.fonts, ...brandFonts },
   devtools: devtoolsDark,
 };
+
+/** The same themes with the inspector reskinned to the extension branding —
+ *  the popup's "custom inspector theme" option. */
+export const themeBranded: AppTheme = {
+  ...theme,
+  devtools: brandDevtools(brandColorsLight, false),
+};
+
+export const themeDarkBranded: AppTheme = {
+  ...themeDark,
+  devtools: brandDevtools(brandColorsDark, true),
+};
+
+/** Picks the inspector theme for a color-scheme + branding preference pair. */
+export function resolveInspectorTheme(
+  isDark: boolean,
+  branded: boolean,
+): AppTheme {
+  if (branded) return isDark ? themeDarkBranded : themeBranded;
+  return isDark ? themeDark : theme;
+}

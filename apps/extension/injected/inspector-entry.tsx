@@ -10,9 +10,11 @@ import styled, {
   StyleSheetManager,
   ThemeProvider,
   css,
+  useTheme,
 } from "styled-components";
 import { Icon, IconButton } from "cherry-styled-components";
-import { theme as lightTheme, themeDark } from "~lib/theme";
+import { resolveInspectorTheme } from "~lib/theme";
+import { readCustomThemeSetting, watchCustomThemeSetting } from "~lib/settings";
 import {
   InspectorWindow,
   PanelHost,
@@ -34,13 +36,18 @@ import {
   type ElementSnapshot,
 } from "~injected/inspector-dom";
 import {
+  CLEAR_SITE_COOKIES_MESSAGE,
   DELETE_COOKIE_MESSAGE,
   EVALUATE_MESSAGE,
   GET_COOKIES_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
   REQUEST_COOKIE_ACCESS_MESSAGE,
+  SET_COOKIE_MESSAGE,
   randomConsoleEventName,
   type CapturedConsolePayload,
+  type ClearSiteCookiesRequest,
+  type ClearSiteCookiesResponse,
+  type CookieDraft,
   type CookieEntry,
   type CookieScope,
   type DeleteCookieRequest,
@@ -53,6 +60,8 @@ import {
   type InterceptConsoleResponse,
   type RequestCookieAccessRequest,
   type RequestCookieAccessResponse,
+  type SetCookieRequest,
+  type SetCookieResponse,
 } from "~lib/messages";
 import { ElementsPanel } from "~injected/panels/elements-panel";
 import {
@@ -384,6 +393,53 @@ async function deleteCookie(
   }
 }
 
+async function saveCookie(
+  original: CookieEntry | null,
+  next: CookieDraft,
+): Promise<SetCookieResponse> {
+  try {
+    const request: SetCookieRequest = {
+      type: SET_COOKIE_MESSAGE,
+      // Only the identity fields travel; the background re-validates them.
+      original: original && {
+        name: original.name,
+        domain: original.domain,
+        path: original.path,
+        secure: original.secure,
+      },
+      next,
+    };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      SetCookieResponse | undefined;
+    if (!response) throw new Error("empty response");
+    return response;
+  } catch {
+    return {
+      ok: false,
+      error:
+        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+    };
+  }
+}
+
+async function clearSiteCookies(): Promise<ClearSiteCookiesResponse> {
+  try {
+    const request: ClearSiteCookiesRequest = {
+      type: CLEAR_SITE_COOKIES_MESSAGE,
+    };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      ClearSiteCookiesResponse | undefined;
+    if (!response) throw new Error("empty response");
+    return response;
+  } catch {
+    return {
+      ok: false,
+      error:
+        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+    };
+  }
+}
+
 async function requestCookieAccess(
   scope: CookieScope,
 ): Promise<RequestCookieAccessResponse> {
@@ -418,6 +474,7 @@ function initialFrame(): Frame {
 }
 
 function Inspector({ host }: { host: HTMLElement }) {
+  const themeTokens = useTheme();
   const [frame, setFrame] = useState<Frame>(initialFrame);
   // Docked to the bottom by default, like DevTools' own default dock side.
   const [dock, setDock] = useState<DockSide>("bottom");
@@ -610,6 +667,16 @@ function Inspector({ host }: { host: HTMLElement }) {
     [log],
   );
 
+  /* Tree-row hover overlay, painted with the active theme's highlight pair. */
+  const hoverHighlight = useCallback(
+    (element: Element | null) =>
+      highlightElement(element, {
+        fill: themeTokens.devtools.highlightFill,
+        border: themeTokens.devtools.highlightBorder,
+      }),
+    [themeTokens],
+  );
+
   /* Launch with <body> selected so the panels are never empty on arrival. */
   const didAutoSelect = useRef(false);
   useEffect(() => {
@@ -636,8 +703,8 @@ function Inspector({ host }: { host: HTMLElement }) {
       position: "fixed",
       zIndex: "2147483646",
       pointerEvents: "none",
-      background: "rgba(111, 168, 220, 0.66)",
-      border: "1px solid rgba(255, 229, 153, 0.9)",
+      background: themeTokens.devtools.highlightFill,
+      border: `1px solid ${themeTokens.devtools.highlightBorder}`,
       boxSizing: "border-box",
       transition: "all 40ms linear",
     });
@@ -686,7 +753,7 @@ function Inspector({ host }: { host: HTMLElement }) {
       document.removeEventListener("click", choose, true);
       document.removeEventListener("keydown", cancel, true);
     };
-  }, [host, picking, selectElement]);
+  }, [host, picking, selectElement, themeTokens]);
 
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
@@ -1103,7 +1170,7 @@ function Inspector({ host }: { host: HTMLElement }) {
             selectedElement={selectedElement}
             snapshot={snapshot}
             onSelectElement={selectElement}
-            onHoverElement={highlightElement}
+            onHoverElement={hoverHighlight}
             onApplyStyle={applyStyle}
             onRemoveStyle={removeStyle}
           />
@@ -1126,6 +1193,8 @@ function Inspector({ host }: { host: HTMLElement }) {
           <CookiesPanel
             loadCookies={loadCookies}
             deleteCookie={deleteCookie}
+            saveCookie={saveCookie}
+            clearCookies={clearSiteCookies}
             requestAccess={requestCookieAccess}
           />
         )}
@@ -1212,18 +1281,53 @@ function Inspector({ host }: { host: HTMLElement }) {
 }
 
 /**
- * Resolves light or dark once, from the OS preference only.
+ * Owns the theme choice: OS light/dark (live, via matchMedia change events)
+ * crossed with the popup's "custom inspector theme" toggle (live, via
+ * chrome.storage.onChanged — flipping the toggle rethemes an open inspector).
  *
  * Cherry's own providers persist the choice by toggling a `dark` class on
  * <html> and writing localStorage — on the host page, which the inspector must
- * never modify. So the theme object is picked here and handed straight to
+ * never modify. So the theme object is resolved here and handed straight to
  * styled-components.
  */
-function resolveTheme() {
-  const prefersDark = window.matchMedia?.(
-    "(prefers-color-scheme: dark)",
-  ).matches;
-  return prefersDark ? themeDark : lightTheme;
+function InspectorRoot({ host }: { host: HTMLElement }) {
+  const [isDark, setIsDark] = useState(
+    () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
+  );
+  const [branded, setBranded] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!query) return;
+    const onChange = (event: MediaQueryListEvent) => setIsDark(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readCustomThemeSetting().then((enabled) => {
+      if (!cancelled) setBranded(enabled);
+    });
+    const unwatch = watchCustomThemeSetting(setBranded);
+    return () => {
+      cancelled = true;
+      unwatch();
+    };
+  }, []);
+
+  const activeTheme = resolveInspectorTheme(isDark, branded);
+
+  /* Native controls (selects, scrollbars) in the shadow root follow this. */
+  useEffect(() => {
+    host.style.colorScheme = activeTheme.isDark ? "dark" : "light";
+  }, [host, activeTheme]);
+
+  return (
+    <ThemeProvider theme={activeTheme}>
+      <Inspector host={host} />
+    </ThemeProvider>
+  );
 }
 
 function bootstrap() {
@@ -1232,8 +1336,6 @@ function bootstrap() {
     existing.dispatchEvent(new Event(SHOW_EVENT));
     return;
   }
-
-  const activeTheme = resolveTheme();
 
   const host = document.createElement("div");
   host.id = HOST_ID;
@@ -1245,7 +1347,6 @@ function bootstrap() {
     padding: "0",
     border: "0",
     background: "transparent",
-    colorScheme: activeTheme.isDark ? "dark" : "light",
   });
   document.documentElement.append(host);
 
@@ -1259,9 +1360,7 @@ function bootstrap() {
 
   root.render(
     <StyleSheetManager target={styleTarget}>
-      <ThemeProvider theme={activeTheme}>
-        <Inspector host={host} />
-      </ThemeProvider>
+      <InspectorRoot host={host} />
     </StyleSheetManager>,
   );
 }

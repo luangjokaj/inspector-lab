@@ -72,13 +72,20 @@ export function isInspectorNode(node: Element): boolean {
 
 let hoverBox: HTMLDivElement | null = null;
 
+/** Overlay paint, sourced from `theme.devtools.highlightFill` / `Border`. */
+export type HighlightColors = { fill: string; border: string };
+
 /**
  * Paints the picker-style overlay over `element` on the host page — used when
  * hovering rows in the Elements tree. Pass null to clear. The overlay is a
  * singleton and position: fixed, so it needs no cleanup on scroll; it is
- * repositioned or removed on the next call.
+ * repositioned or removed on the next call. Colors are re-applied on every
+ * paint so a theme change recolors an already-visible box.
  */
-export function highlightElement(element: Element | null): void {
+export function highlightElement(
+  element: Element | null,
+  colors?: HighlightColors,
+): void {
   if (!element || isInspectorNode(element) || !element.isConnected) {
     hoverBox?.remove();
     hoverBox = null;
@@ -92,8 +99,6 @@ export function highlightElement(element: Element | null): void {
       position: "fixed",
       zIndex: "2147483646",
       pointerEvents: "none",
-      background: "rgba(111, 168, 220, 0.66)",
-      border: "1px solid rgba(255, 229, 153, 0.9)",
       boxSizing: "border-box",
       transition: "all 40ms linear",
     });
@@ -107,6 +112,12 @@ export function highlightElement(element: Element | null): void {
     width: `${rect.width}px`,
     height: `${rect.height}px`,
   });
+  if (colors) {
+    Object.assign(hoverBox.style, {
+      background: colors.fill,
+      border: `1px solid ${colors.border}`,
+    });
+  }
 }
 
 /** Child elements of `node`, minus the inspector's own DOM. */
