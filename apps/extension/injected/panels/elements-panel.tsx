@@ -14,17 +14,22 @@ import {
   StatusBar,
   SubTab,
   SubTabBar,
+  ToolbarControls,
   devtoolsMono,
 } from "~injected/devtools.styled";
 import {
   ancestorChain,
   describeElement,
   inlineText,
+  isInspectorNode,
   isVoidElement,
   truncate,
   visibleChildren,
   type ElementSnapshot,
 } from "~injected/inspector-dom";
+
+/** DOM search stops collecting past this point to keep huge pages snappy. */
+const MAX_SEARCH_MATCHES = 500;
 
 /** Attributes past this point are elided, as DevTools does on noisy nodes. */
 const MAX_ATTRIBUTE_LENGTH = 60;
@@ -409,6 +414,56 @@ const FilterRow = styled.div`
   border-bottom: solid 1px ${({ theme }) => theme.devtools.border};
 `;
 
+/* --------------------------------------------------------------- search */
+
+/** The find bar under the tree, styled like DevTools' own search toolbar. */
+const SearchRow = styled.div`
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  min-height: ${({ theme }) => theme.devtools.toolbarHeight};
+  padding: 0 4px;
+  background: ${({ theme }) => theme.devtools.toolbar};
+  border-top: solid 1px ${({ theme }) => theme.devtools.border};
+`;
+
+const SearchCount = styled.span`
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  white-space: nowrap;
+`;
+
+/**
+ * True when `element` matches the query as a CSS selector, or contains it in
+ * its tag name, an attribute, or its inline text — the same buckets Chrome's
+ * Elements search covers (minus XPath).
+ */
+function elementMatchesQuery(
+  element: Element,
+  query: string,
+  lower: string,
+): boolean {
+  try {
+    if (element.matches(query)) return true;
+  } catch {
+    /* Not a valid selector; fall through to the string search. */
+  }
+  if (element.tagName.toLowerCase().includes(lower)) return true;
+  for (const attribute of Array.from(element.attributes)) {
+    if (
+      attribute.name.toLowerCase().includes(lower) ||
+      attribute.value.toLowerCase().includes(lower)
+    ) {
+      return true;
+    }
+  }
+  return inlineText(element).toLowerCase().includes(lower);
+}
+
 /* --------------------------------------------------------------- helpers */
 
 type RowKind = "doctype" | "open" | "close" | "overflow";
@@ -600,6 +655,8 @@ export function ElementsPanel({
   });
   const [sidebarTab, setSidebarTab] = useState<"styles" | "computed">("styles");
   const [computedFilter, setComputedFilter] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchIndex, setSearchIndex] = useState(0);
   const [property, setProperty] = useState("color");
   const [value, setValue] = useState("");
   const [feedback, setFeedback] = useState<{
@@ -699,6 +756,51 @@ export function ElementsPanel({
   const applyStyle = (event: React.FormEvent) => {
     event.preventDefault();
     setFeedback(onApplyStyle(property, value));
+  };
+
+  const searchMatches = useMemo(() => {
+    const query = searchQuery.trim();
+    if (!query) return [];
+    const lower = query.toLowerCase();
+    const matches: Element[] = [];
+    for (const element of Array.from(root.querySelectorAll("*"))) {
+      if (isInspectorNode(element)) continue;
+      if (elementMatchesQuery(element, query, lower)) {
+        matches.push(element);
+        if (matches.length >= MAX_SEARCH_MATCHES) break;
+      }
+    }
+    return matches;
+  }, [root, searchQuery]);
+
+  // -1 means "no match visited yet", so the first Enter lands on match 1.
+  useEffect(() => setSearchIndex(-1), [searchQuery]);
+
+  /** Selects match `index`, flashing the same page highlight as hovering. */
+  const jumpToMatch = (index: number) => {
+    const match = searchMatches[index];
+    if (!match) return;
+    setSearchIndex(index);
+    selectRow(match);
+    onHoverElement(match);
+  };
+
+  const stepMatch = (delta: number) => {
+    const length = searchMatches.length;
+    if (length === 0) return;
+    const next =
+      searchIndex < 0
+        ? delta > 0
+          ? 0
+          : length - 1
+        : (searchIndex + delta + length) % length;
+    jumpToMatch(next);
+  };
+
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    stepMatch(event.shiftKey ? -1 : 1);
   };
 
   const crumbs = selectedElement ? ancestorChain(selectedElement) : [];
@@ -817,6 +919,42 @@ export function ElementsPanel({
               );
             })}
           </TreeScroller>
+
+          <SearchRow>
+            <DevtoolsField $grow>
+              <Input
+                id="inspector-element-search"
+                $size="small"
+                $fullWidth
+                placeholder="Find by string or selector"
+                aria-label="Search DOM elements"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={onSearchKeyDown}
+              />
+            </DevtoolsField>
+            {searchQuery.trim() && (
+              <SearchCount role="status">
+                {`${searchIndex < 0 ? 0 : searchIndex + 1} of ${searchMatches.length}`}
+              </SearchCount>
+            )}
+            <ToolbarControls>
+              <IconButton
+                aria-label="Previous match"
+                disabled={searchMatches.length === 0}
+                onClick={() => stepMatch(-1)}
+              >
+                <Icon name="ChevronUp" size={14} />
+              </IconButton>
+              <IconButton
+                aria-label="Next match"
+                disabled={searchMatches.length === 0}
+                onClick={() => stepMatch(1)}
+              >
+                <Icon name="ChevronDown" size={14} />
+              </IconButton>
+            </ToolbarControls>
+          </SearchRow>
 
           <StatusBar onMouseLeave={() => onHoverElement(null)}>
             {crumbs.length === 0 ? (
