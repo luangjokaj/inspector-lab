@@ -43,13 +43,27 @@ WHAT IT DOES
 - Storage: view and edit localStorage and sessionStorage in place.
 - Window management: drag it, resize it, dock it to any edge of the viewport, or let it float. Light and dark themes, plus an optional classic Chrome DevTools look.
 
+INSTALLING ON IPAD AND IPHONE
+
+Orion by Kagi (free on the App Store) is the browser that makes this work on iOS and iPadOS: it installs Chrome Web Store extensions directly, so this listing is the install. Once:
+
+1. Open the ••• menu and choose Settings.
+2. Scroll to the Extensions group and turn on Chrome extensions.
+3. Reopen the ••• menu, tap Extensions, tap the + button, and install Inspector Lab - DevTools from the Chrome Web Store.
+
+Orion's extension support on iOS and iPadOS is still in beta, and Apple limits which extension APIs any browser may offer there, so treat the mobile build as a strong subset rather than a promise of every panel. Orion on macOS installs this extension the same way, with the fuller desktop API surface.
+
+MOBILE AND TABLET, MORE BROADLY
+
+Chrome for Android does not support extensions at all, and Kiwi Browser, the long-standing workaround, was discontinued and archived in 2025. Its extension engine lives on in Microsoft Edge Canary for Android, which installs add-ons from the Edge Add-ons store, and a few smaller Chromium forks now ship similar support. Safari's own extension format is a different package that has to be distributed as an App Store app, not from here. That is the whole landscape today: on a tablet or phone, an extension-capable browser is the only way to get real in-page DevTools, and Orion is the shortest path to it.
+
 PRIVATE BY DESIGN
 
 The inspector activates only when you click the extension icon on a tab, using the activeTab permission, so it has no standing access to your browsing. Site access for the cookies panel and for staying attached across reloads is optional and requested per site, only when you ask for it. Everything you inspect stays in your browser: the extension has no server, sends no data anywhere, and collects nothing.
 
 OPEN SOURCE
 
-MIT licensed. Source code, feature tour, and issue tracker: https://github.com/luangjokaj/dev-inspector
+MIT licensed. Source code, feature tour, and issue tracker: https://github.com/luangjokaj/inspector-lab
 ```
 
 ### Assets to upload in the dashboard (not in the repo)
@@ -61,8 +75,71 @@ MIT licensed. Source code, feature tour, and issue tracker: https://github.com/l
   pane, cookies panel, the inspector docked on an iPad.
 - Small promo tile (optional): 440x280.
 - Marquee promo tile (optional): 1400x560.
-- Homepage URL: https://github.com/luangjokaj/dev-inspector
-- Support URL: https://github.com/luangjokaj/dev-inspector/issues
+- Homepage URL: https://github.com/luangjokaj/inspector-lab
+- Support URL: https://github.com/luangjokaj/inspector-lab/issues
+
+---
+
+## Mobile and tablet install paths
+
+Background for the "INSTALLING ON IPAD AND IPHONE" copy above, and the list of
+what is actually claimable. The extension is MV3 with a `service_worker`
+background and uses `scripting`, `cookies`, `webRequest`, `storage`,
+`permissions`, and `tabs` — that combination is what each browser below has to
+satisfy.
+
+**Orion by Kagi — iOS, iPadOS, macOS. The supported path, and the reason the
+listing mentions a non-Chrome browser at all.** Orion installs Chrome Web Store
+extensions directly, so the Chrome Web Store listing doubles as the iPad and
+iPhone distribution channel with no separate package. Install flow, current as
+of August 2026: ••• menu → Settings → Extensions group → enable Chrome
+extensions → ••• menu → Extensions → **+** → install from the Chrome Web Store.
+Kagi documents iOS/iPadOS extension support as **beta with a reduced API
+surface**, because Apple caps what any iOS browser may expose; macOS Orion has
+the fuller set. Practical consequence: verify the Cookies panel
+(`chrome.cookies`) and the Network panel's header capture (`chrome.webRequest`)
+on a real iPad before making per-panel promises in the listing — the Elements,
+Console, Sources, and Storage panels rest on APIs that are far likelier to be
+present. The store copy is deliberately hedged ("a strong subset rather than a
+promise of every panel") until that testing is done.
+Docs: https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html
+
+**Microsoft Edge Canary — Android. Plausible second channel, needs a second
+store submission.** Edge Canary absorbed Kiwi Browser's extension engine and is
+now the mainstream way to run desktop extensions on Android. It installs **by
+extension ID from the Edge Add-ons store, not the Chrome Web Store**, behind
+Developer Options (Settings → About Microsoft Edge → tap the build number five
+times → "Extension install by id"). So Android support is not a listing change,
+it is a **separate publish to Edge Add-ons**; the same MV3 package should carry
+over unmodified since Edge is Chromium. Canary-only today, so treat any Android
+claim as provisional.
+
+**Kiwi Browser — dead, do not reference.** Discontinued and the repository
+archived in 2025. Any guide still recommending it is stale; the store copy names
+it only to explain where the Android answer went.
+
+**Other Chromium forks on Android** (Quetta and similar) advertise Chrome/Edge
+extension support and are positioned as Kiwi successors. Untested here — fine to
+acknowledge generically ("a few smaller Chromium forks"), not to name in the
+listing until someone has actually installed this extension in one.
+
+**Firefox for Android — does not work today, and it is a code change, not a
+packaging one.** Extensions from addons.mozilla.org have been open to Firefox
+for Android since December 2023, but Firefox's MV3 runs background logic as an
+**event page (`background.scripts`)** and does not support
+`background.service_worker`. Supporting it means declaring both keys in the
+manifest, checking every `chrome.*` call against Firefox's API surface, and
+submitting to AMO. Do not imply Firefox support in the listing.
+
+**Safari proper — a different product, not this listing.** Shipping to Safari on
+iOS/iPadOS/macOS means converting to a Safari Web Extension
+(`xcrun safari-web-extension-converter`) and distributing it as an App Store app
+wrapper, which needs Xcode and a paid Apple Developer account. Orion exists
+precisely to avoid that, which is why it is the recommended path.
+
+One listing caution: naming other browsers in a Chrome Web Store description is
+fine as factual compatibility information, which is how the copy above reads.
+Keep it that way — do not let it turn into a pitch to leave Chrome.
 
 ---
 
