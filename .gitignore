@@ -3,3 +3,4 @@ build/
 .plasmo/
 *.zip
 .DS_Store
+tasks/
