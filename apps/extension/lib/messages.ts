@@ -64,6 +64,25 @@ export type CookieEntry = {
 export type GetCookiesResponse = {
   ok: boolean;
   cookies: CookieEntry[];
+  /** False when the per-site host permission has not been granted. */
+  granted?: boolean;
+  error?: string;
+};
+
+export const REQUEST_COOKIE_ACCESS_MESSAGE =
+  "inspector-lab/request-cookie-access" as const;
+
+/**
+ * Asks the background to prompt for the sender tab's host permission. The
+ * user's click on the panel button carries through runtime messaging as the
+ * gesture chrome.permissions.request requires.
+ */
+export type RequestCookieAccessRequest = {
+  type: typeof REQUEST_COOKIE_ACCESS_MESSAGE;
+};
+
+export type RequestCookieAccessResponse = {
+  ok: boolean;
   error?: string;
 };
 

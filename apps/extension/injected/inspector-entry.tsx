@@ -38,6 +38,7 @@ import {
   EVALUATE_MESSAGE,
   GET_COOKIES_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
+  REQUEST_COOKIE_ACCESS_MESSAGE,
   randomConsoleEventName,
   type CapturedConsolePayload,
   type CookieEntry,
@@ -49,6 +50,8 @@ import {
   type GetCookiesResponse,
   type InterceptConsoleRequest,
   type InterceptConsoleResponse,
+  type RequestCookieAccessRequest,
+  type RequestCookieAccessResponse,
 } from "~lib/messages";
 import { ElementsPanel } from "~injected/panels/elements-panel";
 import {
@@ -302,6 +305,24 @@ async function deleteCookie(
     };
     const response = (await chrome.runtime.sendMessage(request)) as
       DeleteCookieResponse | undefined;
+    if (!response) throw new Error("empty response");
+    return response;
+  } catch {
+    return {
+      ok: false,
+      error:
+        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+    };
+  }
+}
+
+async function requestCookieAccess(): Promise<RequestCookieAccessResponse> {
+  try {
+    const request: RequestCookieAccessRequest = {
+      type: REQUEST_COOKIE_ACCESS_MESSAGE,
+    };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      RequestCookieAccessResponse | undefined;
     if (!response) throw new Error("empty response");
     return response;
   } catch {
@@ -1006,7 +1027,11 @@ function Inspector({ host }: { host: HTMLElement }) {
         {tab === "Sources" && <SourcesPanel />}
         {tab === "Network" && <NetworkPanel />}
         {tab === "Cookies" && (
-          <CookiesPanel loadCookies={loadCookies} deleteCookie={deleteCookie} />
+          <CookiesPanel
+            loadCookies={loadCookies}
+            deleteCookie={deleteCookie}
+            requestAccess={requestCookieAccess}
+          />
         )}
       </PanelHost>
 

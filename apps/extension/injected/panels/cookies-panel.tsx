@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import styled from "styled-components";
-import { Icon, IconButton, Input } from "cherry-styled-components";
+import { Button, Icon, IconButton, Input } from "cherry-styled-components";
 import {
   DataGrid,
+  DevtoolsButtonGroup,
   DevtoolsField,
   EmptyState,
   GridRow,
@@ -17,6 +18,7 @@ import type {
   CookieEntry,
   DeleteCookieResponse,
   GetCookiesResponse,
+  RequestCookieAccessResponse,
 } from "~lib/messages";
 
 /**
@@ -121,6 +123,26 @@ const ActionCell = styled.td`
   }
 `;
 
+/** Shown instead of the table when the per-site grant is missing. */
+const AccessPrompt = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 8px;
+  padding: 16px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSize};
+  text-align: center;
+
+  p {
+    max-width: 420px;
+    margin: 0;
+  }
+`;
+
 const ErrorNote = styled.div`
   padding: 2px 6px;
   color: ${({ theme }) => theme.devtools.status.error};
@@ -150,25 +172,47 @@ function cookieKey(cookie: CookieEntry): string {
 export type CookiesPanelProps = {
   loadCookies: () => Promise<GetCookiesResponse>;
   deleteCookie: (cookie: CookieEntry) => Promise<DeleteCookieResponse>;
+  /** Prompts for the per-site host permission the cookies API needs. */
+  requestAccess: () => Promise<RequestCookieAccessResponse>;
 };
 
-export function CookiesPanel({ loadCookies, deleteCookie }: CookiesPanelProps) {
+export function CookiesPanel({
+  loadCookies,
+  deleteCookie,
+  requestAccess,
+}: CookiesPanelProps) {
   const [cookies, setCookies] = useState<CookieEntry[] | null>(null);
+  const [granted, setGranted] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
   const refresh = useCallback(async () => {
     const response = await loadCookies();
+    setGranted(response.granted !== false);
     if (response.ok) {
       setError(null);
       setCookies(
         [...response.cookies].sort((a, b) => a.name.localeCompare(b.name)),
       );
     } else {
-      setError(response.error ?? "Cookies could not be read.");
+      // The missing-grant state renders its own prompt, not the error bar.
+      setError(
+        response.granted === false
+          ? null
+          : (response.error ?? "Cookies could not be read."),
+      );
       setCookies([]);
     }
   }, [loadCookies]);
+
+  const grantAccess = async () => {
+    const response = await requestAccess();
+    if (response.ok) {
+      await refresh();
+    } else {
+      setError(response.error ?? "Cookie access was not granted.");
+    }
+  };
 
   useEffect(() => {
     void refresh();
@@ -223,6 +267,19 @@ export function CookiesPanel({ loadCookies, deleteCookie }: CookiesPanelProps) {
       <Scroller>
         {cookies === null ? (
           <EmptyState>Reading cookies…</EmptyState>
+        ) : !granted ? (
+          <AccessPrompt>
+            <p>
+              Chrome needs one-time permission before the inspector can read
+              this site&apos;s cookies. It applies to this site only and is
+              remembered.
+            </p>
+            <DevtoolsButtonGroup>
+              <Button $size="small" onClick={() => void grantAccess()}>
+                Allow cookie access
+              </Button>
+            </DevtoolsButtonGroup>
+          </AccessPrompt>
         ) : visible.length === 0 ? (
           <EmptyState>
             {filter.trim()

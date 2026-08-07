@@ -3,6 +3,7 @@ import {
   EVALUATE_MESSAGE,
   GET_COOKIES_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
+  REQUEST_COOKIE_ACCESS_MESSAGE,
   isConsoleEventName,
   type CookieEntry,
   type DeleteCookieRequest,
@@ -13,6 +14,8 @@ import {
   type GetCookiesRequest,
   type InterceptConsoleRequest,
   type InterceptConsoleResponse,
+  type RequestCookieAccessRequest,
+  type RequestCookieAccessResponse,
 } from "~lib/messages";
 
 const PREVIEW_LIMIT = 2000;
@@ -298,12 +301,14 @@ chrome.runtime.onMessage.addListener(
       | EvaluateRequest
       | InterceptConsoleRequest
       | GetCookiesRequest
-      | DeleteCookieRequest;
+      | DeleteCookieRequest
+      | RequestCookieAccessRequest;
     if (
       request?.type !== EVALUATE_MESSAGE &&
       request?.type !== INTERCEPT_CONSOLE_MESSAGE &&
       request?.type !== GET_COOKIES_MESSAGE &&
-      request?.type !== DELETE_COOKIE_MESSAGE
+      request?.type !== DELETE_COOKIE_MESSAGE &&
+      request?.type !== REQUEST_COOKIE_ACCESS_MESSAGE
     ) {
       return;
     }
@@ -325,7 +330,9 @@ chrome.runtime.onMessage.addListener(
         } satisfies GetCookiesResponse);
       } else {
         sendResponse({ ok: false } satisfies
-          InterceptConsoleResponse | DeleteCookieResponse);
+          | InterceptConsoleResponse
+          | DeleteCookieResponse
+          | RequestCookieAccessResponse);
       }
       return;
     }
@@ -341,11 +348,27 @@ chrome.runtime.onMessage.addListener(
         return;
       }
 
-      chrome.cookies
-        .getAll({ url: tabUrl })
-        .then((cookies) => {
+      void (async () => {
+        try {
+          // Report a missing grant explicitly rather than relying on the
+          // cookies API failure shape, so the panel can offer the fix.
+          const granted = await chrome.permissions.contains({
+            origins: [`${new URL(tabUrl).origin}/*`],
+          });
+          if (!granted) {
+            sendResponse({
+              ok: false,
+              cookies: [],
+              granted: false,
+              error: "Cookie access has not been granted for this site.",
+            } satisfies GetCookiesResponse);
+            return;
+          }
+
+          const cookies = await chrome.cookies.getAll({ url: tabUrl });
           sendResponse({
             ok: true,
+            granted: true,
             cookies: cookies.map((cookie): CookieEntry => ({
               name: cookie.name,
               value: cookie.value,
@@ -357,14 +380,49 @@ chrome.runtime.onMessage.addListener(
               sameSite: cookie.sameSite,
             })),
           } satisfies GetCookiesResponse);
-        })
-        .catch((error: unknown) => {
+        } catch (error) {
           sendResponse({
             ok: false,
             cookies: [],
             error: describeCookieError(error, "read cookies"),
           } satisfies GetCookiesResponse);
-        });
+        }
+      })();
+
+      // Keep the message channel open for the async response.
+      return true;
+    }
+
+    if (request.type === REQUEST_COOKIE_ACCESS_MESSAGE) {
+      const tabUrl = sender.tab?.url;
+      if (!tabUrl || !/^https?:/.test(tabUrl)) {
+        sendResponse({
+          ok: false,
+          error: "Cookies are only available on http(s) pages.",
+        } satisfies RequestCookieAccessResponse);
+        return;
+      }
+
+      void (async () => {
+        try {
+          const granted = await chrome.permissions.request({
+            origins: [`${new URL(tabUrl).origin}/*`],
+          });
+          sendResponse({
+            ok: granted,
+            error: granted ? undefined : "Permission was declined.",
+          } satisfies RequestCookieAccessResponse);
+        } catch (error) {
+          // Most likely the click gesture did not survive the round-trip.
+          sendResponse({
+            ok: false,
+            error:
+              error instanceof Error
+                ? `Could not request access: ${error.message}. Try relaunching from the toolbar popup instead.`
+                : "Could not request cookie access. Try relaunching from the toolbar popup instead.",
+          } satisfies RequestCookieAccessResponse);
+        }
+      })();
 
       // Keep the message channel open for the async response.
       return true;
