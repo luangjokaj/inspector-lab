@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styled from "styled-components";
-import { Icon } from "cherry-styled-components";
+import { Icon, resetButton } from "cherry-styled-components";
 import {
   EmptyState,
   PaneHeader,
@@ -12,11 +12,70 @@ import {
   StatusBar,
   devtoolsMono,
 } from "~injected/devtools.styled";
-import { HOST_ID, truncate } from "~injected/inspector-dom";
+import { HOST_ID, STATE_STYLE_ID, truncate } from "~injected/inspector-dom";
+import {
+  FETCH_SOURCE_MESSAGE,
+  type FetchSourceRequest,
+  type FetchSourceResponse,
+} from "~lib/messages";
+import { readBodyCapped } from "~lib/source-fetch";
 
 /** Guards the editor pane against pathological inline scripts. */
 const MAX_SOURCE_LENGTH = 60000;
 const MAX_LINES = 2000;
+
+/** Lazily fetched text of an external file, keyed by file id. */
+type FetchedSource =
+  | { state: "loading" }
+  | { state: "ready"; content: string; truncated: boolean }
+  | { state: "error"; error: string };
+
+/**
+ * Fetches an external resource's text, only ever called when the user opens
+ * the file. Page-context fetch first — same-origin and CORS-friendly hosts,
+ * usually straight from the HTTP cache — then the background as fallback,
+ * which can use the extension's host grants where CORS says no.
+ */
+async function loadExternalSource(url: string): Promise<FetchedSource> {
+  try {
+    const response = await fetch(url, {
+      cache: "force-cache",
+      credentials: "omit",
+    });
+    if (response.ok) {
+      const { text, truncated } = await readBodyCapped(
+        response,
+        MAX_SOURCE_LENGTH,
+      );
+      return { state: "ready", content: text, truncated };
+    }
+    return {
+      state: "error",
+      error: `The server responded with ${response.status}.`,
+    };
+  } catch {
+    /* CORS or network refusal — the background may still have a host grant. */
+  }
+
+  try {
+    const request: FetchSourceRequest = { type: FETCH_SOURCE_MESSAGE, url };
+    const response = (await chrome.runtime.sendMessage(request)) as
+      FetchSourceResponse | undefined;
+    if (response?.ok && typeof response.content === "string") {
+      return {
+        state: "ready",
+        content: response.content,
+        truncated: response.truncated === true,
+      };
+    }
+    return {
+      state: "error",
+      error: response?.error ?? "The file could not be fetched.",
+    };
+  } catch {
+    return { state: "error", error: "The file could not be fetched." };
+  }
+}
 
 type SourceKind = "document" | "stylesheet" | "script";
 
@@ -27,6 +86,14 @@ type SourceFile = {
   kind: SourceKind;
   /** Inline content, or null when the bytes live behind a network request. */
   content: string | null;
+};
+
+/** Asks the navigator to select and scroll to a rule's stylesheet — sent by
+ *  the Styles pane's source links. `seq` distinguishes repeat clicks. */
+export type SourceRevealRequest = {
+  href: string | null;
+  inlineIndex: number | null;
+  seq: number;
 };
 
 const NavRow = styled.button<{ $selected: boolean; $depth: number }>`
@@ -73,16 +140,45 @@ const NavRow = styled.button<{ $selected: boolean; $depth: number }>`
   }
 `;
 
-const GroupRow = styled.div`
+/** A collapsible host or folder row in the file navigator. */
+const GroupRow = styled.button<{ $depth: number }>`
+  ${resetButton};
   display: flex;
   align-items: center;
   gap: 4px;
+  width: 100%;
   height: ${({ theme }) => theme.devtools.rowHeight};
-  padding: 0 4px;
+  padding: 0 4px 0
+    calc(
+      4px + ${({ $depth }) => $depth} *
+        ${({ theme }) => theme.devtools.treeIndent}
+    );
   color: ${({ theme }) => theme.devtools.textSubtle};
   font-family: ${({ theme }) => theme.devtools.fontFamily};
   font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  text-align: left;
   white-space: nowrap;
+  cursor: default;
+
+  &:hover {
+    background: ${({ theme }) => theme.devtools.rowHover};
+  }
+
+  &:focus-visible {
+    outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+    outline-offset: -1px;
+  }
+
+  svg {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 12px;
+  }
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 `;
 
 /** Line-numbered editor, mirroring the Sources code viewer. */
@@ -141,14 +237,19 @@ function hostFrom(url: string): string {
 
 /**
  * Lists what the page already has in the DOM. Inline `<style>` and `<script>`
- * bodies are shown verbatim; external resources are listed by URL only, since
- * fetching them would issue network requests the user did not ask for.
+ * bodies are shown verbatim; external resources start as URL-only entries and
+ * are fetched lazily when (and only when) the user opens them.
+ *
+ * Inline `<style>` ids are position-based (`style-N`) and must stay aligned
+ * with matchedCssRules' inlineIndex, which counts the same DOM order — both
+ * skip the inspector's own state-styles tag.
  */
 function collectSources(): SourceFile[] {
   const files: SourceFile[] = [];
 
   const clone = document.documentElement.cloneNode(true) as HTMLElement;
   clone.querySelector(`#${HOST_ID}`)?.remove();
+  clone.querySelector(`#${STATE_STYLE_ID}`)?.remove();
 
   files.push({
     id: "document",
@@ -158,10 +259,13 @@ function collectSources(): SourceFile[] {
     content: truncate(clone.outerHTML, MAX_SOURCE_LENGTH),
   });
 
-  document.querySelectorAll("style").forEach((style, index) => {
+  let styleIndex = -1;
+  document.querySelectorAll("style").forEach((style) => {
+    if (style.id === STATE_STYLE_ID) return;
+    styleIndex += 1;
     files.push({
-      id: `style-${index}`,
-      name: `(inline stylesheet ${index + 1})`,
+      id: `style-${styleIndex}`,
+      name: `(inline stylesheet ${styleIndex + 1})`,
       url: location.href,
       kind: "stylesheet",
       content: truncate(style.textContent ?? "", MAX_SOURCE_LENGTH),
@@ -207,27 +311,199 @@ function collectSources(): SourceFile[] {
   return files;
 }
 
-export function SourcesPanel() {
+/* ------------------------------------------------------------- file tree */
+
+type FolderNode = {
+  name: string;
+  /** Slash-joined path from the host root; "" for the host itself. */
+  path: string;
+  subfolders: Map<string, FolderNode>;
+  files: SourceFile[];
+};
+
+/**
+ * Folder chain for a file. External resources nest under their URL path
+ * folders; the document and inline entries sit at the host root, the way
+ * DevTools keeps inline sources under the page node.
+ */
+function folderSegments(file: SourceFile): string[] {
+  if (file.content !== null) return [];
+  try {
+    const segments = new URL(file.url, location.href).pathname
+      .split("/")
+      .filter(Boolean);
+    segments.pop(); // the file name itself
+    return segments;
+  } catch {
+    return [];
+  }
+}
+
+function buildTree(files: SourceFile[]): Array<[string, FolderNode]> {
+  const hosts = new Map<string, FolderNode>();
+
+  for (const file of files) {
+    const host = hostFrom(file.url);
+    let node = hosts.get(host);
+    if (!node) {
+      node = { name: host, path: "", subfolders: new Map(), files: [] };
+      hosts.set(host, node);
+    }
+
+    for (const segment of folderSegments(file)) {
+      let child = node.subfolders.get(segment);
+      if (!child) {
+        child = {
+          name: segment,
+          path: node.path ? `${node.path}/${segment}` : segment,
+          subfolders: new Map(),
+          files: [],
+        };
+        node.subfolders.set(segment, child);
+      }
+      node = child;
+    }
+    node.files.push(file);
+  }
+
+  return Array.from(hosts.entries());
+}
+
+export type SourcesPanelProps = {
+  /** Set by the Styles pane's source links; null when nothing to reveal. */
+  reveal?: SourceRevealRequest | null;
+};
+
+export function SourcesPanel({ reveal }: SourcesPanelProps) {
   const files = useMemo(collectSources, []);
   const [selectedId, setSelectedId] = useState<string>("document");
+  /** Collapsed host/folder keys (`host|path`); everything starts expanded. */
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const selectedNavRef = useRef<HTMLButtonElement | null>(null);
+  const lastRevealSeq = useRef(0);
+  const [fetchedById, setFetchedById] = useState<Map<string, FetchedSource>>(
+    () => new Map(),
+  );
 
   const selected = files.find((file) => file.id === selectedId) ?? files[0];
 
-  const groups = useMemo(() => {
-    const byHost = new Map<string, SourceFile[]>();
-    files.forEach((file) => {
-      const host = hostFrom(file.url);
-      const bucket = byHost.get(host);
-      if (bucket) bucket.push(file);
-      else byHost.set(host, [file]);
+  const tree = useMemo(() => buildTree(files), [files]);
+
+  /* Opening an external file fetches its text — once, on demand. */
+  useEffect(() => {
+    const target = selected;
+    if (!target || target.content !== null || fetchedById.has(target.id)) {
+      return;
+    }
+    setFetchedById((current) =>
+      new Map(current).set(target.id, { state: "loading" }),
+    );
+    void loadExternalSource(target.url).then((result) => {
+      setFetchedById((current) => new Map(current).set(target.id, result));
     });
-    return Array.from(byHost.entries());
-  }, [files]);
+  }, [selected, fetchedById]);
+
+  /* A reveal request selects the file and re-expands its folder chain. */
+  useEffect(() => {
+    if (!reveal || reveal.seq === lastRevealSeq.current) return;
+    lastRevealSeq.current = reveal.seq;
+
+    const target =
+      reveal.inlineIndex !== null
+        ? files.find((file) => file.id === `style-${reveal.inlineIndex}`)
+        : reveal.href !== null
+          ? files.find(
+              (file) => file.kind === "stylesheet" && file.url === reveal.href,
+            )
+          : undefined;
+    if (!target) return;
+
+    setSelectedId(target.id);
+    setCollapsedKeys((current) => {
+      const host = hostFrom(target.url);
+      const next = new Set(current);
+      next.delete(`${host}|`);
+      let path = "";
+      for (const segment of folderSegments(target)) {
+        path = path ? `${path}/${segment}` : segment;
+        next.delete(`${host}|${path}`);
+      }
+      return next;
+    });
+  }, [reveal, files]);
+
+  /* Runs after expansion re-renders too, so a revealed row always exists. */
+  useEffect(() => {
+    selectedNavRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selectedId, collapsedKeys]);
+
+  const toggleFolder = (key: string) => {
+    setCollapsedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const renderFolder = (
+    host: string,
+    node: FolderNode,
+    depth: number,
+  ): React.ReactNode => {
+    const key = `${host}|${node.path}`;
+    const isCollapsed = collapsedKeys.has(key);
+
+    return (
+      <div key={key}>
+        <GroupRow
+          type="button"
+          $depth={depth}
+          aria-expanded={!isCollapsed}
+          onClick={() => toggleFolder(key)}
+        >
+          <Icon name={isCollapsed ? "ChevronRight" : "ChevronDown"} size={12} />
+          <Icon name="Folder" size={12} />
+          <span>{node.name}</span>
+        </GroupRow>
+        {!isCollapsed && (
+          <>
+            {Array.from(node.subfolders.values())
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((child) => renderFolder(host, child, depth + 1))}
+            {node.files.map((file) => (
+              <NavRow
+                key={file.id}
+                ref={file.id === selected?.id ? selectedNavRef : undefined}
+                type="button"
+                $depth={depth + 1}
+                $selected={file.id === selected?.id}
+                title={file.url}
+                onClick={() => setSelectedId(file.id)}
+              >
+                <Icon name={iconFor[file.kind]} size={12} />
+                <span>{file.name}</span>
+              </NavRow>
+            ))}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const fetched =
+    selected && selected.content === null
+      ? fetchedById.get(selected.id)
+      : undefined;
+  const displayContent =
+    selected?.content ?? (fetched?.state === "ready" ? fetched.content : null);
 
   const lines = useMemo(() => {
-    if (!selected?.content) return [];
-    return selected.content.split("\n").slice(0, MAX_LINES);
-  }, [selected]);
+    if (!displayContent) return [];
+    return displayContent.split("\n").slice(0, MAX_LINES);
+  }, [displayContent]);
 
   return (
     <Panel>
@@ -235,27 +511,7 @@ export function SourcesPanel() {
         <SplitSidebar $side="left">
           <PaneHeader>Page</PaneHeader>
           <Scroller>
-            {groups.map(([host, hostFiles]) => (
-              <div key={host}>
-                <GroupRow>
-                  <Icon name="Folder" size={12} />
-                  {host}
-                </GroupRow>
-                {hostFiles.map((file) => (
-                  <NavRow
-                    key={file.id}
-                    type="button"
-                    $depth={1}
-                    $selected={file.id === selected?.id}
-                    title={file.url}
-                    onClick={() => setSelectedId(file.id)}
-                  >
-                    <Icon name={iconFor[file.kind]} size={12} />
-                    <span>{file.name}</span>
-                  </NavRow>
-                ))}
-              </div>
-            ))}
+            {tree.map(([host, node]) => renderFolder(host, node, 0))}
           </Scroller>
         </SplitSidebar>
 
@@ -263,22 +519,26 @@ export function SourcesPanel() {
           <Scroller>
             {!selected ? (
               <EmptyState>No sources found on this page.</EmptyState>
-            ) : selected.content === null ? (
-              <EmptyState>
-                {selected.name} is an external resource. Its contents are not
-                fetched, so only the URL is listed.
-              </EmptyState>
-            ) : (
+            ) : displayContent !== null ? (
               <Editor>
                 <Gutter aria-hidden="true">
                   {lines.map((_, index) => `${index + 1}`).join("\n")}
                 </Gutter>
                 <Code>{lines.join("\n")}</Code>
               </Editor>
+            ) : fetched?.state === "error" ? (
+              <EmptyState>
+                {selected.name} could not be loaded: {fetched.error}
+              </EmptyState>
+            ) : (
+              <EmptyState>Fetching {selected.name}…</EmptyState>
             )}
           </Scroller>
           <StatusBar>
-            {selected ? `${selected.url}` : "No source selected"}
+            <span>{selected ? `${selected.url}` : "No source selected"}</span>
+            {fetched?.state === "ready" && fetched.truncated && (
+              <span>truncated</span>
+            )}
           </StatusBar>
         </SplitMain>
       </SplitView>
