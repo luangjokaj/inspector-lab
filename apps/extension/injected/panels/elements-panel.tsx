@@ -343,7 +343,9 @@ const StateCheck = styled.label`
     margin: 0;
   }
 
-  input {
+  /* Doubled ampersands out-specify Cherry's own control sizing, which uses
+     the same class+descendant specificity — injection order stops mattering. */
+  && input {
     width: 12px;
     height: 12px;
     min-width: 12px;
@@ -352,8 +354,8 @@ const StateCheck = styled.label`
     accent-color: ${({ theme }) => theme.devtools.accent};
   }
 
-  /* Cherry's check mark, shrunk to sit inside the 12px circle. */
-  svg {
+  /* Cherry's check mark, shrunk to sit inside the 12px box. */
+  && svg {
     width: 8px;
     height: 8px;
     stroke-width: 4px;
