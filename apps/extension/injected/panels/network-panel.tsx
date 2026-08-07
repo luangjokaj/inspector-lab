@@ -113,14 +113,19 @@ function nameFrom(url: string): string {
  * Reads what the browser already recorded through the Performance timeline.
  * These are real requests for the page, not fabricated rows — but they are a
  * snapshot rather than a live capture, so the toolbar offers a refresh.
+ *
+ * `clearedBefore` implements DevTools' clear button without touching
+ * performance.clearResourceTimings(), which would wipe the page's own timing
+ * buffer: entries recorded up to that timestamp are simply no longer listed.
  */
-function collectRequests(): NetworkRequest[] {
+function collectRequests(clearedBefore: number): NetworkRequest[] {
   const timings = [
     ...performance.getEntriesByType("navigation"),
     ...performance.getEntriesByType("resource"),
   ] as PerformanceResourceTiming[];
 
   return timings
+    .filter((entry) => entry.startTime > clearedBefore)
     .map((entry, index) => {
       // responseStatus is recent; treat it as optional rather than assume it.
       const status = (
@@ -151,14 +156,21 @@ export function NetworkPanel() {
   const [filter, setFilter] = useState("");
   const [kind, setKind] = useState<RequestKind | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [clearedBefore, setClearedBefore] = useState(0);
 
   const requests = useMemo(
-    () => collectRequests(),
+    () => collectRequests(clearedBefore),
     // Re-read the timeline when the user asks for a refresh.
-    [generation],
+    [generation, clearedBefore],
   );
 
   const refresh = useCallback(() => setGeneration((n) => n + 1), []);
+
+  /** DevTools' ⊘: empties the list; later requests still appear. */
+  const clear = useCallback(() => {
+    setClearedBefore(performance.now());
+    setSelectedId(null);
+  }, []);
 
   const visible = requests.filter((request) => {
     if (kind !== "all" && request.type !== kind) return false;
@@ -186,6 +198,9 @@ export function NetworkPanel() {
         <ToolbarControls>
           <IconButton aria-label="Refresh request list" onClick={refresh}>
             <Icon name="RefreshCw" size={14} />
+          </IconButton>
+          <IconButton aria-label="Clear request list" onClick={clear}>
+            <Icon name="Ban" size={14} />
           </IconButton>
         </ToolbarControls>
         <ToolbarDivider />
@@ -219,8 +234,9 @@ export function NetworkPanel() {
       <Scroller>
         {visible.length === 0 ? (
           <EmptyState>
-            No requests recorded. Reload the page with the inspector open, then
-            refresh this list.
+            {clearedBefore > 0
+              ? "Request list cleared. New requests appear after a refresh."
+              : "No requests recorded. Reload the page with the inspector open, then refresh this list."}
           </EmptyState>
         ) : (
           <RequestGrid>
