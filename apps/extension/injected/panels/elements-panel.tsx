@@ -354,10 +354,14 @@ const StateCheck = styled.label`
     accent-color: ${({ theme }) => theme.devtools.accent};
   }
 
-  /* Cherry's check mark, shrunk to sit inside the 12px box. */
+  /* Cherry's check mark, shrunk to sit inside the 12px box. The min-* pair
+     is the load-bearing part: Cherry sizes the check with min-width /
+     min-height 12px, which clamps any width override silently. */
   && svg {
     width: 8px;
     height: 8px;
+    min-width: 8px;
+    min-height: 8px;
     stroke-width: 4px;
   }
 `;
