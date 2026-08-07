@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import styled, { css } from "styled-components";
-import { Button, Input } from "cherry-styled-components";
+import { Button, Icon, IconButton, Input } from "cherry-styled-components";
 import {
   DevtoolsButtonGroup,
   DevtoolsField,
@@ -174,9 +174,69 @@ const CssSelector = styled.span`
 `;
 
 const CssDeclaration = styled.div`
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
   padding-left: 12px;
+`;
+
+const DeclarationText = styled.span`
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+`;
+
+/**
+ * Hover-revealed per-declaration actions. Restyles the Cherry `IconButton`
+ * inside into a DevTools-flat control, the same way `ToolbarControls` does —
+ * never by wrapping the Cherry component itself.
+ */
+const DeclarationActions = styled.span`
+  display: inline-flex;
+  flex: 0 0 auto;
+
+  button {
+    width: 15px;
+    height: 15px;
+    min-width: 15px;
+    padding: 0;
+    color: ${({ theme }) => theme.devtools.textSubtle};
+    background: transparent;
+    border: none;
+    border-radius: 2px;
+    box-shadow: none;
+    transition: none;
+    opacity: 0;
+
+    svg {
+      width: 11px;
+      height: 11px;
+    }
+
+    &:hover:not(:disabled) {
+      color: ${({ theme }) => theme.devtools.text};
+      background: ${({ theme }) => theme.devtools.tabHoverBackground};
+      border: none;
+      box-shadow: none;
+    }
+
+    &:focus,
+    &:active {
+      border: none;
+      box-shadow: none;
+    }
+
+    &:focus-visible {
+      outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+      outline-offset: -1px;
+      opacity: 1;
+    }
+  }
+
+  ${CssDeclaration}:hover & button {
+    opacity: 1;
+  }
 `;
 
 const CssProperty = styled.span`
@@ -520,6 +580,8 @@ export type ElementsPanelProps = {
     property: string,
     value: string,
   ) => { error: boolean; message: string };
+  /** Removes one declaration from the element's inline `style`. */
+  onRemoveStyle: (property: string) => { error: boolean; message: string };
 };
 
 export function ElementsPanel({
@@ -529,6 +591,7 @@ export function ElementsPanel({
   onSelectElement,
   onHoverElement,
   onApplyStyle,
+  onRemoveStyle,
 }: ElementsPanelProps) {
   const [expanded, setExpanded] = useState<Set<Element>>(() => {
     const initial = new Set<Element>([document.documentElement]);
@@ -602,7 +665,11 @@ export function ElementsPanel({
           ? Math.min(index + 1, openRows.length - 1)
           : Math.max(index - 1, 0);
       const next = openRows[nextIndex];
-      if (next) selectRow(next.element);
+      if (next) {
+        selectRow(next.element);
+        // Keyboard selection paints the same page highlight as hovering.
+        onHoverElement(next.element);
+      }
       return;
     }
 
@@ -624,6 +691,7 @@ export function ElementsPanel({
       if (current.expanded) toggle(current.element);
       else if (current.element.parentElement) {
         selectRow(current.element.parentElement);
+        onHoverElement(current.element.parentElement);
       }
     }
   };
@@ -653,6 +721,7 @@ export function ElementsPanel({
             tabIndex={0}
             onKeyDown={onKeyDown}
             onMouseLeave={() => onHoverElement(null)}
+            onBlur={() => onHoverElement(null)}
           >
             {rows.map((row) => {
               if (row.kind === "doctype") {
@@ -805,10 +874,20 @@ export function ElementsPanel({
                 ) : (
                   snapshot.inlineStyles.map((entry) => (
                     <CssDeclaration key={entry.name}>
-                      <CssProperty>{entry.name}</CssProperty>
-                      <Punct>: </Punct>
-                      <CssValue>{entry.value}</CssValue>
-                      <Punct>;</Punct>
+                      <DeclarationText>
+                        <CssProperty>{entry.name}</CssProperty>
+                        <Punct>: </Punct>
+                        <CssValue>{entry.value}</CssValue>
+                        <Punct>;</Punct>
+                      </DeclarationText>
+                      <DeclarationActions>
+                        <IconButton
+                          aria-label={`Delete ${entry.name}`}
+                          onClick={() => setFeedback(onRemoveStyle(entry.name))}
+                        >
+                          <Icon name="X" size={11} />
+                        </IconButton>
+                      </DeclarationActions>
                     </CssDeclaration>
                   ))
                 )}

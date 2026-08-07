@@ -31,8 +31,13 @@ import {
 } from "~injected/inspector-dom";
 import {
   EVALUATE_MESSAGE,
+  INTERCEPT_CONSOLE_MESSAGE,
+  randomConsoleEventName,
+  type CapturedConsolePayload,
   type EvaluateRequest,
   type EvaluateResponse,
+  type InterceptConsoleRequest,
+  type InterceptConsoleResponse,
 } from "~lib/messages";
 import { ElementsPanel } from "~injected/panels/elements-panel";
 import {
@@ -46,6 +51,8 @@ import { NetworkPanel } from "~injected/panels/network-panel";
 const MIN_WIDTH = 480;
 const MIN_HEIGHT = 320;
 const VIEWPORT_GUTTER = 12;
+/** Oldest console entries are dropped past this point, as DevTools also caps. */
+const MAX_CONSOLE_ENTRIES = 1000;
 
 /** Tab order matches Chrome DevTools: Elements is always first. */
 const TABS = ["Elements", "Console", "Sources", "Network"] as const;
@@ -146,11 +153,67 @@ function Inspector({ host }: { host: HTMLElement }) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const log = useCallback((level: ConsoleLevel, text: string) => {
-    setEntries((current) => [
-      ...current,
-      { id: nextEntryId.current++, level, text },
-    ]);
+    setEntries((current) => {
+      const next = [...current, { id: nextEntryId.current++, level, text }];
+      return next.length > MAX_CONSOLE_ENTRIES
+        ? next.slice(next.length - MAX_CONSOLE_ENTRIES)
+        : next;
+    });
   }, []);
+
+  /*
+   * Console capture: ask the background to patch the page's console in the
+   * MAIN world, then listen for the entries it re-broadcasts. The event name
+   * is a random per-launch token, so page scripts cannot find the channel.
+   * Capture starts at launch — earlier logs live only in the browser console.
+   */
+  useEffect(() => {
+    const eventName = randomConsoleEventName();
+
+    const onCaptured = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (typeof detail !== "string") return;
+
+      let payload: CapturedConsolePayload;
+      try {
+        payload = JSON.parse(detail) as CapturedConsolePayload;
+      } catch {
+        return;
+      }
+      if (typeof payload?.text !== "string") return;
+
+      const level: ConsoleLevel =
+        payload.level === "warn"
+          ? "warning"
+          : payload.level === "error"
+            ? "error"
+            : payload.level === "info"
+              ? "info"
+              : "log";
+      log(level, payload.text);
+    };
+
+    document.addEventListener(eventName, onCaptured);
+
+    const request: InterceptConsoleRequest = {
+      type: INTERCEPT_CONSOLE_MESSAGE,
+      eventName,
+    };
+    void (async () => {
+      try {
+        const response = (await chrome.runtime.sendMessage(request)) as
+          InterceptConsoleResponse | undefined;
+        if (!response?.ok) throw new Error("rejected");
+      } catch {
+        log(
+          "warning",
+          "console.log capture is unavailable; page logs stay in the browser console.",
+        );
+      }
+    })();
+
+    return () => document.removeEventListener(eventName, onCaptured);
+  }, [log]);
 
   useLayoutEffect(() => {
     host.style.left = `${frame.left}px`;
@@ -415,6 +478,24 @@ function Inspector({ host }: { host: HTMLElement }) {
     return { error: false, message };
   }
 
+  function removeStyle(property: string) {
+    const element = selectedElement;
+
+    if (!element) {
+      const message = "Choose an element first.";
+      log("error", message);
+      return { error: true, message };
+    }
+
+    element.style.removeProperty(property);
+    // removeProperty leaves an empty style="" behind; drop it from the tree.
+    if (!element.getAttribute("style")) element.removeAttribute("style");
+    setSnapshot(snapshotElement(element));
+    const message = `${property} removed from ${describeElement(element)}`;
+    log("log", message);
+    return { error: false, message };
+  }
+
   function hideInspector() {
     setPicking(false);
     highlightElement(null);
@@ -485,6 +566,7 @@ function Inspector({ host }: { host: HTMLElement }) {
             onSelectElement={selectElement}
             onHoverElement={highlightElement}
             onApplyStyle={applyStyle}
+            onRemoveStyle={removeStyle}
           />
         )}
         {tab === "Console" && (
