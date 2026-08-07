@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import styled from "styled-components";
-import { Button, Icon, IconButton, Input } from "cherry-styled-components";
+import {
+  Button,
+  Icon,
+  IconButton,
+  Input,
+  alpha,
+} from "cherry-styled-components";
 import {
   DataGrid,
   DevtoolsButtonGroup,
@@ -40,6 +46,9 @@ type NetworkRow = {
   sizeLabel: string;
   duration: number;
   startTime: number;
+  /** Time to first byte, for the waterfall's lighter waiting stretch; 0 when
+   *  unknown (fetch/XHR captures, cross-origin timing without TAO). */
+  ttfb: number;
   cached: boolean;
   /** Full fetch/XHR capture (headers + bodies), when the wrapper saw it. */
   detail: CapturedNetworkRequest | null;
@@ -61,19 +70,22 @@ const FILTERS: { id: RequestKind | "all"; label: string }[] = [
 /** Column widths live here rather than in a `<col>` so nothing is inlined. */
 const RequestGrid = styled(DataGrid)`
   th:nth-child(1) {
-    width: 44%;
+    width: 30%;
   }
   th:nth-child(2) {
-    width: 12%;
+    width: 9%;
   }
   th:nth-child(3) {
-    width: 14%;
+    width: 10%;
   }
   th:nth-child(4) {
-    width: 15%;
+    width: 12%;
   }
   th:nth-child(5) {
-    width: 15%;
+    width: 9%;
+  }
+  th:nth-child(6) {
+    width: 30%;
   }
 `;
 
@@ -81,13 +93,51 @@ const NameCell = styled.td`
   color: ${({ theme }) => theme.devtools.text};
 `;
 
-const StatusCell = styled.td<{ $failed: boolean }>`
-  color: ${({ theme, $failed }) =>
-    $failed ? theme.devtools.status.error : theme.devtools.text};
+const StatusCell = styled.td<{ $failed: boolean; $success: boolean }>`
+  color: ${({ theme, $failed, $success }) =>
+    $failed
+      ? theme.devtools.status.error
+      : $success
+        ? theme.devtools.status.success
+        : theme.devtools.text};
 `;
 
 const MutedCell = styled.td`
   color: ${({ theme }) => theme.devtools.textSubtle};
+`;
+
+const WaterfallCell = styled.td`
+  vertical-align: middle;
+`;
+
+/** The row's slice of the shared request timeline; bars position inside it. */
+const WaterfallTrack = styled.div`
+  position: relative;
+  height: 7px;
+`;
+
+/* Bar offsets and widths are per-request percentages of the shared
+   timeline, so they are set inline rather than minting a styled class per
+   unique geometry. */
+
+const WaterfallBar = styled.div<{ $failed: boolean; $pending: boolean }>`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: ${({ theme, $failed }) =>
+    $failed ? theme.devtools.status.error : theme.devtools.accent};
+  opacity: ${({ $pending }) => ($pending ? 0.45 : 1)};
+`;
+
+/** The waiting (TTFB) stretch, lighter than the download stretch. */
+const WaterfallWait = styled.div<{ $failed: boolean }>`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: ${({ theme, $failed }) =>
+    alpha($failed ? theme.devtools.status.error : theme.devtools.accent, 35)};
 `;
 
 /* ------------------------------------------------------------ detail pane */
@@ -196,6 +246,7 @@ type PerfRequest = {
   sizeLabel: string;
   duration: number;
   startTime: number;
+  ttfb: number;
   cached: boolean;
 };
 
@@ -235,6 +286,12 @@ function collectRequests(clearedBefore: number): PerfRequest[] {
           : formatBytes(entry.transferSize || entry.encodedBodySize),
         duration: entry.duration,
         startTime: entry.startTime,
+        // responseStart is 0 for cross-origin resources without a
+        // Timing-Allow-Origin header; 0 means "no waiting stretch known".
+        ttfb:
+          entry.responseStart > 0
+            ? Math.max(entry.responseStart - entry.startTime, 0)
+            : 0,
         cached,
       } satisfies PerfRequest;
     })
@@ -334,6 +391,7 @@ export function NetworkPanel({
           : "—",
         duration: entry.duration,
         startTime: entry.startTime,
+        ttfb: 0,
         cached: false,
         detail: entry,
         headers: matchWebEntry(webEntries, entry.url, entry.startTime),
@@ -370,6 +428,7 @@ export function NetworkPanel({
           sizeLabel: entry.sizeLabel,
           duration: entry.duration,
           startTime: entry.startTime,
+          ttfb: entry.ttfb,
           cached: entry.cached || (web?.fromCache ?? false),
           detail: null,
           headers: web,
@@ -408,6 +467,40 @@ export function NetworkPanel({
     (latest, request) => Math.max(latest, request.startTime + request.duration),
     0,
   );
+
+  /* One shared axis for the Waterfall column: every bar is positioned as a
+     percentage of the span from the first request's start to `finish`. */
+  const timelineStart = visible.reduce(
+    (earliest, request) => Math.min(earliest, request.startTime),
+    Number.POSITIVE_INFINITY,
+  );
+  const timelineSpan = Math.max(finish - timelineStart, 1);
+
+  /** Bar geometry for one row, as percentages of the shared timeline. */
+  const waterfallMetrics = (request: NetworkRow) => {
+    // A pending request has no duration yet; stretch it to the current end.
+    const total = request.pending
+      ? Math.max(finish - request.startTime, 0)
+      : request.duration;
+    const wait = request.pending ? 0 : Math.min(request.ttfb, total);
+    const left = ((request.startTime - timelineStart) / timelineSpan) * 100;
+    const waitWidth = (wait / timelineSpan) * 100;
+    const barLeft = left + waitWidth;
+    // Floor keeps sub-millisecond requests visible as a sliver.
+    const barWidth = Math.min(
+      Math.max(((total - wait) / timelineSpan) * 100, 0.4),
+      100 - barLeft,
+    );
+    return { left, waitWidth, barLeft, barWidth };
+  };
+
+  const waterfallTitle = (request: NetworkRow): string => {
+    if (request.pending) return "Pending";
+    const offset = Math.round(request.startTime - timelineStart);
+    const waiting =
+      request.ttfb > 0 ? `, ${Math.round(request.ttfb)} ms waiting` : "";
+    return `Started at ${offset} ms, ${Math.round(request.duration)} ms total${waiting}`;
+  };
 
   const detailHeaders = (
     title: string,
@@ -485,28 +578,56 @@ export function NetworkPanel({
                     <th scope="col">Type</th>
                     <th scope="col">Size</th>
                     <th scope="col">Time</th>
+                    <th scope="col">Waterfall</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((request) => (
-                    <GridRow
-                      key={request.id}
-                      $selected={request.id === selectedId}
-                      onClick={() => selectRow(request.id)}
-                    >
-                      <NameCell title={request.url}>{request.name}</NameCell>
-                      <StatusCell $failed={request.failed}>
-                        {request.status}
-                      </StatusCell>
-                      <MutedCell>{request.type}</MutedCell>
-                      <MutedCell>{request.sizeLabel}</MutedCell>
-                      <MutedCell>
-                        {request.pending
-                          ? "…"
-                          : `${Math.round(request.duration)} ms`}
-                      </MutedCell>
-                    </GridRow>
-                  ))}
+                  {visible.map((request) => {
+                    const bar = waterfallMetrics(request);
+                    return (
+                      <GridRow
+                        key={request.id}
+                        $selected={request.id === selectedId}
+                        onClick={() => selectRow(request.id)}
+                      >
+                        <NameCell title={request.url}>{request.name}</NameCell>
+                        <StatusCell
+                          $failed={request.failed}
+                          $success={request.status.startsWith("2")}
+                        >
+                          {request.status}
+                        </StatusCell>
+                        <MutedCell>{request.type}</MutedCell>
+                        <MutedCell>{request.sizeLabel}</MutedCell>
+                        <MutedCell>
+                          {request.pending
+                            ? "…"
+                            : `${Math.round(request.duration)} ms`}
+                        </MutedCell>
+                        <WaterfallCell title={waterfallTitle(request)}>
+                          <WaterfallTrack aria-hidden="true">
+                            {bar.waitWidth > 0 && (
+                              <WaterfallWait
+                                $failed={request.failed}
+                                style={{
+                                  left: `${bar.left}%`,
+                                  width: `${bar.waitWidth}%`,
+                                }}
+                              />
+                            )}
+                            <WaterfallBar
+                              $failed={request.failed}
+                              $pending={request.pending}
+                              style={{
+                                left: `${bar.barLeft}%`,
+                                width: `${bar.barWidth}%`,
+                              }}
+                            />
+                          </WaterfallTrack>
+                        </WaterfallCell>
+                      </GridRow>
+                    );
+                  })}
                 </tbody>
               </RequestGrid>
             )}
