@@ -24,8 +24,8 @@ import type {
 } from "~lib/messages";
 
 const SCOPES: { id: CookieScope; label: string }[] = [
+  { id: "all", label: "All" },
   { id: "site", label: "This site" },
-  { id: "all", label: "All sites" },
 ];
 
 /**
@@ -138,7 +138,7 @@ export function CookiesPanel({
   deleteCookie,
   requestAccess,
 }: CookiesPanelProps) {
-  const [scope, setScope] = useState<CookieScope>("site");
+  const [scope, setScope] = useState<CookieScope>("all");
   const [cookies, setCookies] = useState<CookieEntry[] | null>(null);
   const [granted, setGranted] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -1056,6 +1056,7 @@ function Inspector({ host }: { host: HTMLElement }) {
           >
             <Icon name="CircleQuestionMark" size={14} />
           </IconButton>
+          <ToolbarDivider />
           <IconButton
             aria-label="Float the inspector to move it freely"
             $active={dock === "floating"}
