@@ -1,3 +1,12 @@
+<p align="center">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/header/graph.svg?title=Inspector+Lab&amp;subtitle=DevTools+anywhere.+Even+on+iPad.&amp;logo=https%3A%2F%2Ffiles.riangle.com%2Finspector-lab%2Ficon.png&amp;size=wide&amp;mode=dark&amp;font=geist&amp;image=https%3A%2F%2Fimages.unsplash.com%2Fphoto-1550745165-9bc0b252726f%3Fw%3D1600%26q%3D70%26fit%3Dcrop%26fm%3Djpg&amp;overlay=1" /><img alt="Doccupine" src="https://shieldcn.dev/header/graph.svg?title=Inspector+Lab&amp;subtitle=DevTools+anywhere.+Even+on+iPad.&amp;logo=https%3A%2F%2Ffiles.riangle.com%2Finspector-lab%2Ficon.png&amp;size=wide&amp;mode=light&amp;font=geist&amp;image=https%3A%2F%2Fimages.unsplash.com%2Fphoto-1550745165-9bc0b252726f%3Fw%3D1600%26q%3D70%26fit%3Dcrop%26fm%3Djpg&amp;overlay=1" /></picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/luangjokaj/wordpressify"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/luangjokaj/wordpressify/stars.svg" /><img alt="badge" src="https://shieldcn.dev/github/luangjokaj/wordpressify/stars.svg?mode=light" /></picture></a>
+  <a href="#"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Chrome Web Store.svg" /><img alt="badge" src="https://shieldcn.dev/badge/Chrome Web Store.svg?mode=light" /></picture></a>
+</p>
+
 # Inspector Lab - DevTools
 
 A movable, resizable in-page inspector built as a Manifest V3 Chrome extension. Open source under the MIT license.
