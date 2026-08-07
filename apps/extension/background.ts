@@ -185,10 +185,61 @@ function installConsoleInterceptor(eventName: string, limit: number): boolean {
     }
   };
 
+  /** `String(value)` that can never throw (revoked proxies, hostile toString). */
+  const toStringSafe = (value: unknown): string => {
+    try {
+      return String(value);
+    } catch {
+      return Object.prototype.toString.call(value);
+    }
+  };
+
+  /**
+   * Chrome's format specifiers: they apply only when the first argument is a
+   * string, each specifier consumes one following argument, unmatched
+   * specifiers stay literal, `%%` escapes, and leftover arguments are
+   * appended space-separated. `%c` consumes its CSS argument but styles
+   * cannot be rendered in a text-only feed, so it contributes nothing.
+   */
+  const format = (args: unknown[]): string => {
+    const first = args[0];
+    if (typeof first !== "string" || !/%[sdifoOc%]/.test(first)) {
+      return args.map((argument) => describe(argument, 0)).join(" ");
+    }
+
+    const rest = args.slice(1);
+    let cursor = 0;
+
+    const formatted = first.replace(/%[sdifoOc%]/g, (specifier) => {
+      if (specifier === "%%") return "%";
+      if (cursor >= rest.length) return specifier;
+      const value = rest[cursor++];
+
+      if (specifier === "%s") {
+        return typeof value === "string" ? value : toStringSafe(value);
+      }
+      if (specifier === "%d" || specifier === "%i") {
+        const parsed = Number(value);
+        return Number.isNaN(parsed) ? "NaN" : String(Math.trunc(parsed));
+      }
+      if (specifier === "%f") {
+        return String(Number(value));
+      }
+      if (specifier === "%c") return "";
+      // %o / %O: object formatting; depth 1 keeps nested strings quoted.
+      return describe(value, 1);
+    });
+
+    const leftover = rest
+      .slice(cursor)
+      .map((argument) => describe(argument, 0));
+    return [formatted, ...leftover].join(" ");
+  };
+
   const forward = (level: string, args: unknown[]) => {
     // A console patch must never be able to break the page.
     try {
-      let text = args.map((argument) => describe(argument, 0)).join(" ");
+      let text = format(args);
       if (text.length > limit) text = `${text.slice(0, limit)}…`;
       document.dispatchEvent(
         new CustomEvent(state.eventName, {
