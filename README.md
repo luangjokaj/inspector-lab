@@ -2,16 +2,20 @@
 
 A movable, resizable in-page inspector built as a Manifest V3 Chrome extension.
 
-## Current MVP
+## Features
 
-- Launches from the extension popup with a user gesture.
-- Requests temporary `activeTab` access instead of permanent access to every site.
-- Injects a React + Cherry UI into an isolated Shadow DOM.
-- Drags from the top instrument bar and resizes from the lower-right handle.
-- Picks and highlights elements on the host page.
-- Shows the selector, dimensions, relationships, attributes, text, and common computed styles.
-- Applies validated inline CSS property/value pairs to the selected element.
-- Hides and reopens the existing inspector instance without duplicating it.
+Inspector Lab drops a DevTools-style window directly onto the page: an Elements panel with live styles and computed values, console capture and evaluation, sources and network views, and fully editable cookies and storage — floating or docked, themed light and dark.
+
+**[Read the full feature tour →](docs/FEATURES.md)**
+
+Highlights:
+
+- Launches from the extension popup with a user gesture and temporary `activeTab` access — no standing permission to every site.
+- Injects a React + Cherry UI into an isolated Shadow DOM; drags, resizes, and docks to any viewport edge.
+- Picks and highlights elements, applies validated inline CSS, and shows computed styles with a box-model diagram.
+- Captures page console output and evaluates expressions in the page context.
+- Lists sources and network requests; edits cookies and local/session storage in place, DevTools-style.
+- Ships with the Chrome DevTools look by default, with an optional custom Inspector Lab theme.
 
 ## Development
 
@@ -33,4 +37,4 @@ The production extension is emitted to `apps/extension/build/chrome-mv3-prod`.
 
 ## Current boundaries
 
-The MVP inspects the shared DOM and computed CSS. It does not yet capture page-console history, network traffic, source files, cross-origin iframe contents, or protected `chrome://` pages.
+Console history starts at inspector launch, network rows come from the Performance timeline (no request/response bodies), and cross-origin iframes, CSP-blocked `eval`, and protected `chrome://` pages remain out of reach. The full list lives at the end of [docs/FEATURES.md](docs/FEATURES.md).
