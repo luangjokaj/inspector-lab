@@ -239,6 +239,65 @@ const DockResizer = styled.div<{ $side: "bottom" | "left" | "right" }>`
   }
 `;
 
+/* ------------------------------------------------------------ about card */
+
+const AboutBackdrop = styled.div`
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Same hardcoded-scrim precedent as the picker highlight overlay. */
+  background: rgba(0, 0, 0, 0.4);
+`;
+
+const AboutCard = styled.section`
+  width: 280px;
+  padding: 12px 14px;
+  color: ${({ theme }) => theme.devtools.text};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSize};
+  line-height: ${({ theme }) => theme.devtools.lineHeight};
+  background: ${({ theme }) => theme.devtools.surface};
+  border: solid 1px ${({ theme }) => theme.devtools.border};
+  box-shadow: ${({ theme }) => theme.shadows.lg};
+`;
+
+const AboutHeader = styled.header`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+`;
+
+const AboutBody = styled.div`
+  display: grid;
+  gap: 4px;
+
+  p {
+    margin: 0;
+  }
+`;
+
+const AboutMuted = styled.span`
+  color: ${({ theme }) => theme.devtools.textSubtle};
+`;
+
+const AboutLink = styled.a`
+  color: ${({ theme }) => theme.devtools.accent};
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+    outline-offset: 1px;
+  }
+`;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), Math.max(min, max));
 }
@@ -374,6 +433,7 @@ function Inspector({ host }: { host: HTMLElement }) {
   );
   const [dragging, setDragging] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [tab, setTab] = useState<TabName>("Elements");
   const [snapshot, setSnapshot] = useState<ElementSnapshot | null>(null);
   const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(
@@ -549,6 +609,23 @@ function Inspector({ host }: { host: HTMLElement }) {
     },
     [log],
   );
+
+  /* Launch with <body> selected so the panels are never empty on arrival. */
+  const didAutoSelect = useRef(false);
+  useEffect(() => {
+    if (didAutoSelect.current) return;
+    didAutoSelect.current = true;
+    if (document.body) selectElement(document.body);
+  }, [selectElement]);
+
+  useEffect(() => {
+    if (!aboutOpen) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAboutOpen(false);
+    };
+    window.addEventListener("keydown", close, true);
+    return () => window.removeEventListener("keydown", close, true);
+  }, [aboutOpen]);
 
   useEffect(() => {
     if (!picking) return;
@@ -974,6 +1051,12 @@ function Inspector({ host }: { host: HTMLElement }) {
 
         <ToolbarControls>
           <IconButton
+            aria-label="About Inspector Lab"
+            onClick={() => setAboutOpen(true)}
+          >
+            <Icon name="CircleQuestionMark" size={14} />
+          </IconButton>
+          <IconButton
             aria-label="Float the inspector to move it freely"
             $active={dock === "floating"}
             onClick={() => setDock("floating")}
@@ -1047,6 +1130,49 @@ function Inspector({ host }: { host: HTMLElement }) {
         )}
         {tab === "Storage" && <StoragePanel />}
       </PanelHost>
+
+      {aboutOpen && (
+        <AboutBackdrop onClick={() => setAboutOpen(false)}>
+          <AboutCard
+            role="dialog"
+            aria-modal="true"
+            aria-label="About Inspector Lab"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <AboutHeader>
+              <strong>
+                Inspector Lab{" "}
+                <AboutMuted>v{chrome.runtime.getManifest().version}</AboutMuted>
+              </strong>
+              <ToolbarControls>
+                <IconButton
+                  aria-label="Close about"
+                  onClick={() => setAboutOpen(false)}
+                >
+                  <Icon name="X" size={14} />
+                </IconButton>
+              </ToolbarControls>
+            </AboutHeader>
+            <AboutBody>
+              <p>Created by Luan Gjokaj</p>
+              <p>
+                <AboutLink
+                  href="https://riangle.com"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  riangle.com
+                </AboutLink>
+              </p>
+              <p>
+                <AboutLink href="mailto:luan@riangle.com">
+                  luan@riangle.com
+                </AboutLink>
+              </p>
+            </AboutBody>
+          </AboutCard>
+        </AboutBackdrop>
+      )}
 
       {dock === "floating" ? (
         <>
