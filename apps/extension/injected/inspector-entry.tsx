@@ -1379,6 +1379,78 @@ function Inspector({ host }: { host: HTMLElement }) {
     return { error: false, message };
   }
 
+  /**
+   * One attribute edit from the Elements tree. `previousName` null adds a
+   * new attribute, an empty `name` removes `previousName`, and a null
+   * `value` keeps the attribute's current value (a pure rename).
+   */
+  function editAttribute(
+    element: Element,
+    previousName: string | null,
+    name: string,
+    value: string | null,
+  ) {
+    const trimmedName = name.trim();
+
+    if (previousName && !trimmedName) {
+      element.removeAttribute(previousName);
+      if (selectedElement && element === selectedElement)
+        setSnapshot(snapshotElement(selectedElement));
+      const message = `${previousName} removed from ${describeElement(element)}`;
+      log("log", message);
+      return { error: false, message };
+    }
+
+    if (!trimmedName) {
+      return { error: true, message: "Enter an attribute name." };
+    }
+
+    // Validates the name without touching the element: setAttribute would
+    // throw the same InvalidCharacterError after the old attribute was
+    // already removed.
+    try {
+      document.createAttribute(trimmedName);
+    } catch {
+      const message = `"${trimmedName}" is not a valid attribute name.`;
+      log("error", message);
+      return { error: true, message };
+    }
+
+    const nextValue =
+      value ?? (previousName ? (element.getAttribute(previousName) ?? "") : "");
+    if (previousName && previousName !== trimmedName) {
+      element.removeAttribute(previousName);
+    }
+    element.setAttribute(trimmedName, nextValue);
+
+    if (selectedElement && element === selectedElement)
+      setSnapshot(snapshotElement(selectedElement));
+    const message = previousName
+      ? `${trimmedName} updated on ${describeElement(element)}`
+      : `${trimmedName} added to ${describeElement(element)}`;
+    log("log", message);
+    return { error: false, message };
+  }
+
+  /** Replaces a leaf element's text from the tree, as Chrome's editing does. */
+  function editText(element: Element, text: string) {
+    // A tree leaf can still hold element children on the page when they are
+    // all the inspector's own filtered-out nodes (a text-only <body> hosts
+    // the inspector itself); writing textContent would destroy them.
+    if (element.children.length > 0) {
+      const message = "Only text-only elements can be edited here.";
+      log("error", message);
+      return { error: true, message };
+    }
+
+    element.textContent = text;
+    if (selectedElement && element === selectedElement)
+      setSnapshot(snapshotElement(selectedElement));
+    const message = `Text updated on ${describeElement(element)}`;
+    log("log", message);
+    return { error: false, message };
+  }
+
   /** The X button: hides the window AND ends reload persistence. */
   function hideInspector() {
     setPicking(false);
@@ -1493,6 +1565,8 @@ function Inspector({ host }: { host: HTMLElement }) {
             onHoverElement={hoverHighlight}
             onApplyStyle={applyStyle}
             onRemoveStyle={removeStyle}
+            onEditAttribute={editAttribute}
+            onEditText={editText}
             forcedStates={forcedStates}
             onToggleForcedState={toggleForcedState}
             stateStyles={selectedStateStyles}

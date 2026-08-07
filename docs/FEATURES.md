@@ -15,6 +15,7 @@ Inspector Lab - DevTools is a movable, resizable devtools window that lives dire
 
 - Live DOM tree of the host page with hover highlighting painted over the real elements.
 - **Element picker**: point at anything on the page to select it; the tree expands and scrolls to the picked element, and the inspector's own UI is never pickable.
+- **Edit the DOM in place**, as in Chrome: double-click an attribute name or value to change it, double-click a tag name to add an attribute (typed as `name="value"`), and double-click a text node to rewrite it. Enter or blur commits, Escape cancels, and Tab walks from a name to its value to the next attribute. Clearing an attribute's name removes the attribute; attribute names are validated before anything touches the element.
 - **Styles pane**: matched stylesheet rules with the winning rules on top, plus inline CSS editing — apply validated property/value pairs to the selected element or remove them.
 - **Force element state**, like DevTools' `:hov` panel: check `:active`, `:hover`, `:focus`, `:focus-visible`, or `:focus-within` and the page's own rules for that state apply to the selected element immediately (same-origin stylesheets; cross-origin sheets are counted but unreadable).
 - **Per-state CSS authoring**: add and remove your own declarations for any of those states. They apply while the state is forced and on real interaction, without ever touching the page's own stylesheets or DOM attributes.

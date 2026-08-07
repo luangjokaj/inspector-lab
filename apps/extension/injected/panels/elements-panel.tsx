@@ -180,6 +180,43 @@ const Ellipsis = styled.span`
   color: ${({ theme }) => theme.devtools.textSubtle};
 `;
 
+/**
+ * Inline editor scale for tree rows. Compacts the Cherry `Input` to the
+ * row's mono metrics from the parent, the same way `DevtoolsField` restyles
+ * it at toolbar scale — never by wrapping the Cherry component itself.
+ */
+const TreeEditor = styled.span`
+  display: inline-flex;
+  align-items: center;
+  max-width: 60ch;
+  vertical-align: bottom;
+
+  /* Cherry wraps controls in a span; flatten it onto the row line. */
+  span {
+    display: inline-flex;
+    width: 100%;
+    margin: 0;
+  }
+
+  && input {
+    width: 100%;
+    height: ${({ theme }) => theme.devtools.rowHeight};
+    min-height: ${({ theme }) => theme.devtools.rowHeight};
+    padding: 0 1px;
+    color: ${({ theme }) => theme.devtools.text};
+    font-family: ${({ theme }) => theme.devtools.monoFamily};
+    font-size: ${({ theme }) => theme.devtools.monoFontSize};
+    line-height: ${({ theme }) => theme.devtools.rowHeight};
+    background: ${({ theme }) => theme.devtools.surface};
+    border: none;
+    border-radius: 1px;
+    outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+    outline-offset: 0;
+    box-shadow: none;
+    transition: none;
+  }
+`;
+
 /* ------------------------------------------------------------ style pane */
 
 const CssBlock = styled.div`
@@ -664,32 +701,196 @@ function buildRows(root: Element, expanded: Set<Element>): TreeRowData[] {
   return rows;
 }
 
+/** The tree edit in progress: an attribute name, value, new attribute, or text. */
+type TreeEdit =
+  | { kind: "attr-name"; element: Element; name: string }
+  | { kind: "attr-value"; element: Element; name: string }
+  | { kind: "attr-add"; element: Element }
+  | { kind: "text"; element: Element };
+
+type CommitVia = "enter" | "blur" | "tab";
+
+/** The tree's editing surface, threaded from the panel into each open tag. */
+type TreeEditing = {
+  edit: TreeEdit | null;
+  onStart: (edit: TreeEdit) => void;
+  /** Returns false when the edit was rejected and the editor stays open. */
+  onCommit: (edit: TreeEdit, draft: string, via: CommitVia) => boolean;
+  onCancel: () => void;
+};
+
+/**
+ * Parses the add-attribute box: `name`, `name=value`, or `name="value"`.
+ * The value keeps everything after `=`, minus one pair of matching quotes.
+ */
+function parseAttributeInput(
+  raw: string,
+): { name: string; value: string } | null {
+  const match = /^([^\s="'<>/]+)(?:\s*=\s*(.*))?$/s.exec(raw.trim());
+  if (!match) return null;
+  let value = match[2] ?? "";
+  const quote = value.charAt(0);
+  if (
+    (quote === '"' || quote === "'") &&
+    value.length >= 2 &&
+    value.endsWith(quote)
+  ) {
+    value = value.slice(1, -1);
+  }
+  return { name: match[1], value };
+}
+
+/**
+ * One in-place editor in a tree row: Enter or blur commits, Escape cancels,
+ * Tab commits and advances (the panel decides where to). Sized to its text
+ * so the row keeps its shape while editing.
+ */
+function TreeInlineEditor({
+  initial,
+  label,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  label: string;
+  /** Returns false to keep the editor open (the edit was rejected). */
+  onCommit: (draft: string, via: CommitVia) => boolean;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  /* Guards the blur that follows Enter/Tab/Escape from double-committing. */
+  const doneRef = useRef(false);
+
+  const finish = (via: CommitVia) => {
+    if (doneRef.current) return;
+    if (onCommit(draft, via)) doneRef.current = true;
+  };
+
+  return (
+    <TreeEditor
+      style={{ width: `${Math.max(draft.length, 3) + 2}ch` }}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >
+      <Input
+        $size="small"
+        $fullWidth
+        autoFocus
+        aria-label={label}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onFocus={(event) => event.target.select()}
+        onBlur={() => finish("blur")}
+        onKeyDown={(event) => {
+          // The tree's own arrow/typing shortcuts must not see editor keys.
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            finish("enter");
+          } else if (event.key === "Tab") {
+            event.preventDefault();
+            finish("tab");
+          } else if (event.key === "Escape") {
+            doneRef.current = true;
+            onCancel();
+          }
+        }}
+      />
+    </TreeEditor>
+  );
+}
+
 /**
  * `<div class="card" id="x">` split into colored spans. As in Chrome, the
  * angle brackets, `=` and quotes inherit the tag color; only attribute names
- * and values recolor.
+ * and values recolor. With `editing` present, double-click starts an inline
+ * edit: an attribute name or value in place, or a new attribute from the tag
+ * name.
  */
-function OpenTag({ element }: { element: Element }) {
+function OpenTag({
+  element,
+  editing,
+}: {
+  element: Element;
+  editing?: TreeEditing;
+}) {
   const tag = element.tagName.toLowerCase();
+  const edit =
+    editing && editing.edit?.element === element ? editing.edit : null;
+
+  const begin = (next: TreeEdit) => (event: React.MouseEvent) => {
+    event.stopPropagation();
+    editing?.onStart(next);
+  };
+
+  const editor = (current: TreeEdit, initial: string, label: string) =>
+    editing ? (
+      <TreeInlineEditor
+        initial={initial}
+        label={label}
+        onCommit={(draft, via) => editing.onCommit(current, draft, via)}
+        onCancel={editing.onCancel}
+      />
+    ) : null;
 
   return (
     <>
-      <TagName>&lt;{tag}</TagName>
+      <TagName
+        onDoubleClick={editing && begin({ kind: "attr-add", element })}
+        title={editing ? "Double-click to add an attribute" : undefined}
+      >
+        &lt;{tag}
+      </TagName>
       {Array.from(element.attributes).map((attribute) => (
         <span key={attribute.name}>
           {" "}
-          <AttrName>{attribute.name}</AttrName>
-          {attribute.value !== "" && (
+          {edit?.kind === "attr-name" && edit.name === attribute.name ? (
+            editor(
+              edit,
+              attribute.name,
+              `Edit name of attribute ${attribute.name}`,
+            )
+          ) : (
+            <AttrName
+              onDoubleClick={
+                editing &&
+                begin({ kind: "attr-name", element, name: attribute.name })
+              }
+            >
+              {attribute.name}
+            </AttrName>
+          )}
+          {edit?.kind === "attr-value" && edit.name === attribute.name ? (
             <>
               <TagName>=&quot;</TagName>
-              <AttrValue>
-                {truncate(attribute.value, MAX_ATTRIBUTE_LENGTH)}
-              </AttrValue>
+              {editor(
+                edit,
+                attribute.value,
+                `Edit value of attribute ${attribute.name}`,
+              )}
               <TagName>&quot;</TagName>
             </>
+          ) : (
+            attribute.value !== "" && (
+              <>
+                <TagName>=&quot;</TagName>
+                <AttrValue
+                  onDoubleClick={
+                    editing &&
+                    begin({ kind: "attr-value", element, name: attribute.name })
+                  }
+                >
+                  {truncate(attribute.value, MAX_ATTRIBUTE_LENGTH)}
+                </AttrValue>
+                <TagName>&quot;</TagName>
+              </>
+            )
           )}
         </span>
       ))}
+      {edit?.kind === "attr-add" && (
+        <> {editor(edit, "", `New attribute for ${tag}`)}</>
+      )}
       <TagName>&gt;</TagName>
     </>
   );
@@ -753,6 +954,21 @@ export type ElementsPanelProps = {
   ) => { error: boolean; message: string };
   /** Removes one declaration from the element's inline `style`. */
   onRemoveStyle: (property: string) => { error: boolean; message: string };
+  /**
+   * One attribute edit from the tree. `previousName` null adds, an empty
+   * `name` removes `previousName`, a null `value` keeps the current value.
+   */
+  onEditAttribute: (
+    element: Element,
+    previousName: string | null,
+    name: string,
+    value: string | null,
+  ) => { error: boolean; message: string };
+  /** Replaces a text-only element's content from the tree. */
+  onEditText: (
+    element: Element,
+    text: string,
+  ) => { error: boolean; message: string };
   /** Which pseudo-classes are currently forced on the selected element. */
   forcedStates: ForcedStateMap;
   onToggleForcedState: (state: PseudoState, forced: boolean) => void;
@@ -776,6 +992,8 @@ export function ElementsPanel({
   onHoverElement,
   onApplyStyle,
   onRemoveStyle,
+  onEditAttribute,
+  onEditText,
   forcedStates,
   onToggleForcedState,
   stateStyles,
@@ -801,6 +1019,7 @@ export function ElementsPanel({
     message: string;
     error: boolean;
   } | null>(null);
+  const [treeEdit, setTreeEdit] = useState<TreeEdit | null>(null);
 
   const selectedRowRef = useRef<HTMLDivElement | null>(null);
 
@@ -901,6 +1120,86 @@ export function ElementsPanel({
   const applyStyle = (event: React.FormEvent) => {
     event.preventDefault();
     setFeedback(onApplyStyle(property, value));
+  };
+
+  /** Applies a finished tree edit; false keeps the editor open to fix it. */
+  const commitTreeEdit = (
+    edit: TreeEdit,
+    draft: string,
+    via: CommitVia,
+  ): boolean => {
+    if (edit.kind === "attr-name") {
+      const result = onEditAttribute(edit.element, edit.name, draft, null);
+      setFeedback(result);
+      if (result.error) return false;
+      const nextName = draft.trim();
+      // Tab walks name → value, as in Chrome; a removal has no value to edit.
+      setTreeEdit(
+        via === "tab" && nextName
+          ? { kind: "attr-value", element: edit.element, name: nextName }
+          : null,
+      );
+      return true;
+    }
+
+    if (edit.kind === "attr-value") {
+      const result = onEditAttribute(edit.element, edit.name, edit.name, draft);
+      setFeedback(result);
+      if (result.error) return false;
+      if (via === "tab") {
+        // Value → next attribute's name, or the add box after the last one.
+        const names = Array.from(edit.element.attributes).map(
+          (attribute) => attribute.name,
+        );
+        const next = names[names.indexOf(edit.name) + 1];
+        setTreeEdit(
+          next
+            ? { kind: "attr-name", element: edit.element, name: next }
+            : { kind: "attr-add", element: edit.element },
+        );
+      } else {
+        setTreeEdit(null);
+      }
+      return true;
+    }
+
+    if (edit.kind === "attr-add") {
+      if (!draft.trim()) {
+        setTreeEdit(null);
+        return true;
+      }
+      const parsed = parseAttributeInput(draft);
+      if (!parsed) {
+        setFeedback({
+          error: true,
+          message: 'Type an attribute as name="value".',
+        });
+        return false;
+      }
+      const result = onEditAttribute(
+        edit.element,
+        null,
+        parsed.name,
+        parsed.value,
+      );
+      setFeedback(result);
+      if (result.error) return false;
+      setTreeEdit(null);
+      return true;
+    }
+
+    const result = onEditText(edit.element, draft);
+    setFeedback(result);
+    if (result.error) return false;
+    setTreeEdit(null);
+    return true;
+  };
+
+  const treeEditing: TreeEditing = {
+    edit: treeEdit,
+    onStart: setTreeEdit,
+    onCommit: commitTreeEdit,
+    onCancel: () => setTreeEdit(null),
   };
 
   const applyStateStyle = (event: React.FormEvent) => {
@@ -1056,7 +1355,7 @@ export function ElementsPanel({
                     }}
                   />
                   <RowContent>
-                    <OpenTag element={row.element} />
+                    <OpenTag element={row.element} editing={treeEditing} />
                     {row.hasChildren && !row.expanded && (
                       <>
                         <Ellipsis>…</Ellipsis>
@@ -1065,7 +1364,29 @@ export function ElementsPanel({
                     )}
                     {!row.hasChildren && !selfClosing && (
                       <>
-                        <TextNode>{truncate(text, 80)}</TextNode>
+                        {treeEdit?.kind === "text" &&
+                        treeEdit.element === row.element ? (
+                          <TreeInlineEditor
+                            initial={row.element.textContent ?? ""}
+                            label={`Edit text of ${describeElement(row.element)}`}
+                            onCommit={(draft, via) =>
+                              commitTreeEdit(treeEdit, draft, via)
+                            }
+                            onCancel={() => setTreeEdit(null)}
+                          />
+                        ) : (
+                          <TextNode
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                              setTreeEdit({
+                                kind: "text",
+                                element: row.element,
+                              });
+                            }}
+                          >
+                            {truncate(text, 80)}
+                          </TextNode>
+                        )}
                         <ClosingTag element={row.element} />
                       </>
                     )}
