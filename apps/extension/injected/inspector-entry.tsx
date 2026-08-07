@@ -1390,7 +1390,7 @@ function Inspector({ host }: { host: HTMLElement }) {
   }
 
   return (
-    <InspectorWindow aria-label="Inspector Lab in-page inspector">
+    <InspectorWindow aria-label="Inspector Lab - DevTools in-page inspector">
       <WindowToolbar $dragging={dragging} onPointerDown={beginDrag}>
         <ToolbarControls>
           <IconButton
@@ -1435,7 +1435,7 @@ function Inspector({ host }: { host: HTMLElement }) {
 
         <ToolbarControls>
           <IconButton
-            aria-label="About Inspector Lab"
+            aria-label="About Inspector Lab - DevTools"
             onClick={() => setAboutOpen(true)}
           >
             <Icon name="CircleQuestionMark" size={14} />
@@ -1470,7 +1470,10 @@ function Inspector({ host }: { host: HTMLElement }) {
             <Icon name="PanelLeft" size={14} />
           </IconButton>
           <ToolbarDivider />
-          <IconButton aria-label="Close Inspector Lab" onClick={hideInspector}>
+          <IconButton
+            aria-label="Close Inspector Lab - DevTools"
+            onClick={hideInspector}
+          >
             <Icon name="X" size={14} />
           </IconButton>
         </ToolbarControls>
@@ -1535,12 +1538,12 @@ function Inspector({ host }: { host: HTMLElement }) {
           <AboutCard
             role="dialog"
             aria-modal="true"
-            aria-label="About Inspector Lab"
+            aria-label="About Inspector Lab - DevTools"
             onClick={(event) => event.stopPropagation()}
           >
             <AboutHeader>
               <strong>
-                Inspector Lab{" "}
+                Inspector Lab - DevTools{" "}
                 <AboutMuted>v{chrome.runtime.getManifest().version}</AboutMuted>
               </strong>
               <ToolbarControls>

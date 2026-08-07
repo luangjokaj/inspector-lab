@@ -214,7 +214,7 @@ function Popup() {
           <Flex $alignItems="center" $justifyContent="space-between" $gap={12}>
             <div>
               <Eyebrow>Local instrument / 01</Eyebrow>
-              <Title>Inspector Lab</Title>
+              <Title>Inspector Lab - DevTools</Title>
             </div>
             <ThemeToggle aria-label="Toggle popup theme" />
           </Flex>

@@ -1,6 +1,6 @@
-# Inspector Lab — Features
+# Inspector Lab - DevTools — Features
 
-Inspector Lab is a movable, resizable devtools window that lives directly on the page you are inspecting, built as a Manifest V3 Chrome extension. It renders inside an isolated Shadow DOM with React and the Cherry design system, and follows Chrome DevTools conventions closely enough that your muscle memory just works.
+Inspector Lab - DevTools is a movable, resizable devtools window that lives directly on the page you are inspecting, built as a Manifest V3 Chrome extension. It renders inside an isolated Shadow DOM with React and the Cherry design system, and follows Chrome DevTools conventions closely enough that your muscle memory just works.
 
 ## Launching and window management
 

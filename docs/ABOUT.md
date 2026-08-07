@@ -1,6 +1,6 @@
-# What is Inspector Lab, and why I built it
+# What is Inspector Lab - DevTools, and why I built it
 
-Inspector Lab is a Chrome extension that puts a full developer-tools window directly on the page you are looking at. Elements tree, live styles, forced states, console with evaluation, network requests with headers and response bodies, sources, cookies, storage. It floats or docks, it survives reloads, and it looks and behaves the way DevTools always has, because your muscle memory is worth keeping.
+Inspector Lab - DevTools is a Chrome extension that puts a full developer-tools window directly on the page you are looking at. Elements tree, live styles, forced states, console with evaluation, network requests with headers and response bodies, sources, cookies, storage. It floats or docks, it survives reloads, and it looks and behaves the way DevTools always has, because your muscle memory is worth keeping.
 
 That description raises an obvious question: browsers already ship devtools, so why build one as an extension?
 

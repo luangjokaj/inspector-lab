@@ -1,8 +1,9 @@
 {
-  "name": "dev-inspector",
+  "name": "inspector-lab-devtools",
   "version": "0.1.0",
   "private": true,
-  "description": "Workspace for the Inspector Lab Chrome extension.",
+  "description": "Workspace for Inspector Lab - DevTools, an in-page devtools Chrome extension.",
+  "license": "MIT",
   "scripts": {
     "dev": "pnpm -r --if-present --parallel run dev",
     "build": "pnpm -r --if-present run build",

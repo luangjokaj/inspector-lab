@@ -1,9 +1,10 @@
 {
-  "name": "@dev-inspector/extension",
-  "displayName": "Inspector Lab",
+  "name": "@inspector-lab/extension",
+  "displayName": "Inspector Lab - DevTools",
   "version": "0.1.0",
-  "description": "A movable, in-page web inspector for learning and lightweight DOM debugging.",
+  "description": "A movable, in-page devtools window: elements, console, network, sources, cookies, and storage on any page.",
   "author": "Luan Gjokaj",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "dev": "plasmo dev",
