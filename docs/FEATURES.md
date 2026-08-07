@@ -41,8 +41,11 @@ Inspector Lab is a movable, resizable devtools window that lives directly on the
 
 ## Network
 
-- Request table built from the browser's Performance timeline: name, status, type, transfer size, and duration for the document and every resource it loaded.
-- Type filters matching DevTools' toolbar: Fetch/XHR, Doc, CSS, JS, Font, Img, Other.
+- **Live fetch/XHR capture with full details**: a page-world wrapper records every JS-initiated request as it happens — method, URL, request and response headers, status, timing, and capped request/response bodies. Pending requests appear immediately and fill in as they complete. On origins with the per-site grant, capture starts at `document_start`, so after a reload even boot-time API calls are recorded.
+- **Request details pane**, DevTools-style: click a row for Headers (general info, request headers, response headers, request body) and Response (body text, with JSON pretty-printed) sub-tabs.
+- **Headers for everything else too**: documents, stylesheets, images, and fonts never pass through JS, so their request/response headers, status, and cache state come from the `webRequest` API — including the reason a request failed (`net::ERR_BLOCKED_BY_CLIENT` and friends).
+- The Performance timeline still backfills rows the live capture didn't see (resources from before launch), deduplicated against captured requests.
+- Type filters matching DevTools' toolbar: Fetch/XHR, Doc, CSS, JS, Font, Img, Other — plus refresh and DevTools-style clear.
 - Cached responses are marked, and failed statuses are colored like DevTools.
 
 ## Cookies
@@ -74,8 +77,8 @@ Inspector Lab is a movable, resizable devtools window that lives directly on the
 
 ## Current boundaries
 
-- Console capture from page boot requires the per-site grant and kicks in from the first reload after launch; without the grant, history starts when the inspector opens.
-- Network rows come from the Performance timeline, so request/response headers and bodies are not captured.
+- Console and network capture from page boot require the per-site grant and kick in from the first reload after launch; without the grant, capture starts when the inspector opens.
+- Response bodies are captured for fetch/XHR requests only (capped at 20 KB); static resources expose headers via `webRequest` but never contents — full-body capture for everything would require `chrome.debugger` and its permanent warning banner.
 - Cross-origin iframe contents and protected pages (`chrome://`, the Web Store) are out of reach.
 - Pages whose CSP blocks `eval` disable console evaluation (browser DevTools can bypass CSP; an in-page inspector cannot).
 - Forcing an element state re-applies rules from same-origin stylesheets only; cross-origin sheets cannot be read, so their `:hover`/`:focus` styling is skipped.
