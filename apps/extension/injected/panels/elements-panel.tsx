@@ -22,7 +22,11 @@ import {
   SubTab,
   SubTabBar,
   ToolbarControls,
+  devtoolsCheckbox,
   devtoolsMono,
+  revealed,
+  rowActionButton,
+  touchHitArea,
 } from "~injected/devtools.styled";
 import {
   ancestorChain,
@@ -180,12 +184,20 @@ const Ellipsis = styled.span`
   color: ${({ theme }) => theme.devtools.textSubtle};
 `;
 
+/** Which syntax color an inline editor keeps while it is open. */
+type EditorTone = "text" | "property" | "value";
+
 /**
- * Inline editor scale for tree rows. Compacts the Cherry `Input` to the
- * row's mono metrics from the parent, the same way `DevtoolsField` restyles
- * it at toolbar scale — never by wrapping the Cherry component itself.
+ * Inline editor scale for any dense row — a tree row, or one half of a CSS
+ * declaration. Compacts the Cherry `Input` to the row's mono metrics from the
+ * parent, the same way `DevtoolsField` restyles it at toolbar scale, and never
+ * by wrapping the Cherry component itself.
+ *
+ * The field is border-free with an outline in its place: an outline takes no
+ * space, so text can become an editor without the row shifting by a pixel. It
+ * keeps the color the text had, so the line still reads as CSS while typing.
  */
-const TreeEditor = styled.span`
+const InlineEditorField = styled.span<{ $tone: EditorTone }>`
   display: inline-flex;
   align-items: center;
   max-width: 60ch;
@@ -203,7 +215,12 @@ const TreeEditor = styled.span`
     height: ${({ theme }) => theme.devtools.rowHeight};
     min-height: ${({ theme }) => theme.devtools.rowHeight};
     padding: 0 1px;
-    color: ${({ theme }) => theme.devtools.text};
+    color: ${({ theme, $tone }) =>
+      $tone === "property"
+        ? theme.devtools.syntax.property
+        : $tone === "value"
+          ? theme.devtools.syntax.value
+          : theme.devtools.text};
     font-family: ${({ theme }) => theme.devtools.monoFamily};
     font-size: ${({ theme }) => theme.devtools.monoFontSize};
     line-height: ${({ theme }) => theme.devtools.rowHeight};
@@ -219,10 +236,20 @@ const TreeEditor = styled.span`
 
 /* ------------------------------------------------------------ style pane */
 
-const CssBlock = styled.div`
+/**
+ * Space held at every declaration's left edge: the enable/disable checkbox on
+ * an authored rule, plain indent on a read-only one — so property names line
+ * up on one column down the whole pane, whichever kind of rule they are in.
+ */
+const DECLARATION_GUTTER = "14px";
+
+const CssBlock = styled.div<{ $editable?: boolean }>`
   ${devtoolsMono};
   padding: 4px 6px;
   border-bottom: solid 1px ${({ theme }) => theme.devtools.border};
+  /* An authored rule takes text: clicking its empty space starts a new
+     declaration, so the caret advertises that before the click happens. */
+  cursor: ${({ $editable }) => ($editable ? "text" : "default")};
 `;
 
 const CssSelector = styled.span`
@@ -230,83 +257,154 @@ const CssSelector = styled.span`
 `;
 
 const CssDeclaration = styled.div`
+  position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 4px;
-  padding-left: 12px;
 `;
 
-const DeclarationText = styled.span`
+/** The gutter kept empty on read-only declarations, for alignment. */
+const DeclarationGutter = styled.span`
+  flex: 0 0 ${DECLARATION_GUTTER};
+`;
+
+/**
+ * DevTools' enable/disable checkbox, in the gutter at the declaration's left
+ * edge. Compacts the Cherry checkbox from the parent (`devtoolsCheckbox`),
+ * and stays out of sight until the row is hovered or focused — except on a
+ * switched-off declaration, whose way back must always be visible, and on a
+ * touch device, which has no hover to reveal anything with.
+ */
+const DeclarationToggle = styled.label<{ $alwaysVisible: boolean }>`
+  ${devtoolsCheckbox};
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 ${DECLARATION_GUTTER};
+  height: ${({ theme }) => theme.devtools.rowHeight};
+  cursor: default;
+  /* Hidden means untappable as well as unseen. Left tappable, the hit area
+     below would turn the rule's own left margin into a toggle and swallow the
+     click that is supposed to start a new declaration there. */
+  opacity: 0;
+  pointer-events: none;
+
+  /* The tap target grows left, into the rule's padding, so it can never take
+     a tap meant for the property name immediately to its right. Overflow to
+     the left of a scroll container is not scrollable, so the few pixels that
+     land outside the rule cost nothing. */
+  ${touchHitArea("right")};
+
+  ${({ $alwaysVisible }) => $alwaysVisible && revealed};
+
+  ${CssDeclaration}:hover &,
+  ${CssDeclaration}:focus-within & {
+    ${revealed};
+  }
+
+  @media (hover: none) {
+    ${revealed};
+  }
+`;
+
+const DeclarationText = styled.span<{ $disabled?: boolean }>`
   flex: 1 1 auto;
   min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+
+  /* A tree row grows sideways with its editor because the tree scrolls
+     horizontally; a fixed-width sidebar column cannot, so an open editor is
+     held to the column instead of pushing a scrollbar into the pane. */
+  ${InlineEditorField} {
+    max-width: 100%;
+  }
+
+  ${({ theme, $disabled }) =>
+    $disabled &&
+    css`
+      /* A switched-off declaration reads as a single muted, struck-through
+         line: the syntax colors go grey with it, as they do in DevTools. */
+      color: ${theme.devtools.textDisabled};
+      text-decoration: line-through;
+
+      span {
+        color: inherit;
+      }
+    `};
 `;
 
-/**
- * Hover-revealed per-declaration actions. Restyles the Cherry `IconButton`
- * inside into a DevTools-flat control, the same way `ToolbarControls` does —
- * never by wrapping the Cherry component itself.
- */
+/** The trailing X. Shares the grids' row-action styling, so it is revealed by
+ *  hover, by focus, and unconditionally where there is no hover. */
 const DeclarationActions = styled.span`
   display: inline-flex;
   flex: 0 0 auto;
+  margin-left: 4px;
+  ${rowActionButton(15)};
 
+  /* Grows left, over the blank filler at the end of the row rather than past
+     the pane's right edge, which would leave the Styles sidebar with a stray
+     horizontal scrollbar. */
   button {
-    width: 15px;
-    height: 15px;
-    min-width: 15px;
-    padding: 0;
-    color: ${({ theme }) => theme.devtools.textSubtle};
-    background: transparent;
-    border: none;
-    border-radius: 2px;
-    box-shadow: none;
-    transition: none;
-    opacity: 0;
-
-    svg {
-      width: 11px;
-      height: 11px;
-    }
-
-    &:hover:not(:disabled) {
-      color: ${({ theme }) => theme.devtools.text};
-      background: ${({ theme }) => theme.devtools.tabHoverBackground};
-      border: none;
-      box-shadow: none;
-    }
-
-    &:focus,
-    &:active {
-      border: none;
-      box-shadow: none;
-    }
-
-    &:focus-visible {
-      outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
-      outline-offset: -1px;
-      opacity: 1;
-    }
+    ${touchHitArea("right")};
   }
 
-  ${CssDeclaration}:hover & button {
-    opacity: 1;
+  ${CssDeclaration}:hover & button,
+  ${CssDeclaration}:focus-within & button {
+    ${revealed};
   }
 `;
 
-const CssProperty = styled.span`
+/**
+ * Property names and values in an authored rule are plain text until they are
+ * clicked. The hover box is the only hint DevTools gives that they are live,
+ * and the caret is what a touch user gets instead.
+ */
+const editableToken = css`
+  cursor: text;
+  border-radius: 2px;
+
+  &:hover {
+    background: ${({ theme }) => theme.devtools.rowHover};
+  }
+`;
+
+const CssProperty = styled.span<{ $editable?: boolean }>`
   color: ${({ theme }) => theme.devtools.syntax.property};
+  ${({ $editable }) => $editable && editableToken};
 `;
 
-const CssValue = styled.span`
+const CssValue = styled.span<{ $editable?: boolean }>`
   color: ${({ theme }) => theme.devtools.syntax.value};
+  ${({ $editable }) => $editable && editableToken};
 `;
 
 const NoDeclarations = styled.div`
-  padding-left: 12px;
+  padding-left: ${DECLARATION_GUTTER};
   color: ${({ theme }) => theme.devtools.textSubtle};
   font-style: italic;
+`;
+
+/**
+ * An authored rule's closing brace, doubling as DevTools' "click the empty
+ * space to start a new declaration" target — the block's own click handler
+ * picks it up. Focusable, so the affordance exists for the keyboard too, and
+ * taller where there is no pointer to aim with: it is empty space, so growing
+ * it for a finger costs the declaration rows none of their density.
+ */
+const RuleFooter = styled.div`
+  display: flex;
+  align-items: center;
+  min-height: ${({ theme }) => theme.devtools.rowHeight};
+
+  &:focus-visible {
+    outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+    outline-offset: -1px;
+  }
+
+  @media (hover: none) {
+    min-height: ${({ theme }) => theme.devtools.touchTarget};
+  }
 `;
 
 /** Selector line of a rule block, with the stylesheet name on the right. */
@@ -361,10 +459,13 @@ const StateGrid = styled.div`
 `;
 
 /**
- * One :state checkbox row. Compacts the Cherry checkbox to DevTools scale
- * from the parent, the same way ToolbarControls restyles Cherry buttons.
+ * One :state checkbox row. The label is the target, so the `:hover` text next
+ * to the box counts as part of it — which is all a finger needs once the row
+ * itself is tall enough. This is a settings grid, not a data row, so growing
+ * it on touch costs the pane's density nothing.
  */
 const StateCheck = styled.label`
+  ${devtoolsCheckbox};
   display: flex;
   align-items: center;
   gap: 4px;
@@ -374,32 +475,8 @@ const StateCheck = styled.label`
   font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
   cursor: default;
 
-  /* Cherry wraps controls in spans; flatten them onto this one line. */
-  span {
-    display: inline-flex;
-    margin: 0;
-  }
-
-  /* Doubled ampersands out-specify Cherry's own control sizing, which uses
-     the same class+descendant specificity — injection order stops mattering. */
-  && input {
-    width: 12px;
-    height: 12px;
-    min-width: 12px;
-    min-height: 12px;
-    margin: 0;
-    accent-color: ${({ theme }) => theme.devtools.accent};
-  }
-
-  /* Cherry's check mark, shrunk to sit inside the 12px box. The min-* pair
-     is the load-bearing part: Cherry sizes the check with min-width /
-     min-height 12px, which clamps any width override silently. */
-  && svg {
-    width: 8px;
-    height: 8px;
-    min-width: 8px;
-    min-height: 8px;
-    stroke-width: 4px;
+  @media (hover: none) {
+    min-height: ${({ theme }) => theme.devtools.touchTarget};
   }
 `;
 
@@ -708,7 +785,7 @@ type TreeEdit =
   | { kind: "attr-add"; element: Element }
   | { kind: "text"; element: Element };
 
-type CommitVia = "enter" | "blur" | "tab";
+type CommitVia = "enter" | "blur" | "tab" | "tab-back";
 
 /** The tree's editing surface, threaded from the panel into each open tag. */
 type TreeEditing = {
@@ -741,18 +818,20 @@ function parseAttributeInput(
 }
 
 /**
- * One in-place editor in a tree row: Enter or blur commits, Escape cancels,
- * Tab commits and advances (the panel decides where to). Sized to its text
- * so the row keeps its shape while editing.
+ * One in-place editor, in a tree row or in a CSS declaration: Enter or blur
+ * commits, Escape cancels, Tab commits and advances (the panel decides where
+ * to). Sized to its own text so the row keeps its shape while editing.
  */
-function TreeInlineEditor({
+function InlineEditor({
   initial,
   label,
+  tone = "text",
   onCommit,
   onCancel,
 }: {
   initial: string;
   label: string;
+  tone?: EditorTone;
   /** Returns false to keep the editor open (the edit was rejected). */
   onCommit: (draft: string, via: CommitVia) => boolean;
   onCancel: () => void;
@@ -767,7 +846,8 @@ function TreeInlineEditor({
   };
 
   return (
-    <TreeEditor
+    <InlineEditorField
+      $tone={tone}
       style={{ width: `${Math.max(draft.length, 3) + 2}ch` }}
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
@@ -789,14 +869,14 @@ function TreeInlineEditor({
             finish("enter");
           } else if (event.key === "Tab") {
             event.preventDefault();
-            finish("tab");
+            finish(event.shiftKey ? "tab-back" : "tab");
           } else if (event.key === "Escape") {
             doneRef.current = true;
             onCancel();
           }
         }}
       />
-    </TreeEditor>
+    </InlineEditorField>
   );
 }
 
@@ -825,7 +905,7 @@ function OpenTag({
 
   const editor = (current: TreeEdit, initial: string, label: string) =>
     editing ? (
-      <TreeInlineEditor
+      <InlineEditor
         initial={initial}
         label={label}
         onCommit={(draft, via) => editing.onCommit(current, draft, via)}
@@ -939,6 +1019,282 @@ function BoxModelLayer({
   );
 }
 
+/* ------------------------------------------------------ style authoring */
+
+type StyleResult = { error: boolean; message: string };
+
+type Declaration = { name: string; value: string };
+
+/** A declaration as the pane lists it. A switched-off one is gone from the
+ *  page but still shown, struck through, the way DevTools keeps it. */
+type DeclarationRow = Declaration & { enabled: boolean };
+
+/** The `element.style` block. Authored `:state` rules use `state:<name>`. */
+const INLINE_BLOCK = "inline";
+
+/**
+ * A rule the user owns and can author into. `apply` upserts one declaration
+ * through the panel's host — which is where property/value validation lives —
+ * and `remove` drops it. A state rule cannot fail to remove one, so it reports
+ * nothing back and the pane keeps whatever feedback is already showing.
+ */
+type StyleBlock = {
+  rows: DeclarationRow[];
+  apply: (name: string, value: string) => StyleResult;
+  remove: (name: string) => StyleResult | undefined;
+};
+
+/** Which half of which declaration is open. `row: "new"` is the blank slot at
+ *  the end of a block, where a declaration is typed before it exists. */
+type StyleEdit = {
+  block: string;
+  row: number | "new";
+  field: "property" | "value";
+};
+
+/** The blank slot's contents: a property with no value yet is not CSS, so it
+ *  lives here until both halves are typed and the host can validate it. */
+type PendingDeclaration = { block: string; name: string; value: string };
+
+/**
+ * What the panel remembers about one rule that the page cannot hold for it.
+ * Switching a declaration off means deleting it from the page, so its text has
+ * to survive here; re-enabling re-appends it, so the order it was shown in has
+ * to survive too, or the row would jump to the bottom of the rule.
+ */
+type BlockEdits = { disabled: Declaration[]; order: string[] };
+
+const NO_EDITS: BlockEdits = { disabled: [], order: [] };
+
+/**
+ * Everything the Styles pane owns about the element it is showing. Keyed by
+ * element so a new selection starts clean by comparison, with no reset effect
+ * and no frame where the last element's editor is open over the new one's CSS.
+ */
+type StylesState = {
+  element: Element | null;
+  edit: StyleEdit | null;
+  pending: PendingDeclaration | null;
+  blocks: Record<string, BlockEdits>;
+};
+
+const NO_STYLES_STATE: StylesState = {
+  element: null,
+  edit: null,
+  pending: null,
+  blocks: {},
+};
+
+/**
+ * Interleaves a rule's live declarations with the ones switched off, following
+ * the display order captured when a row was switched off. Anything that order
+ * does not know about — a declaration added since — keeps the page's own
+ * position, at the end.
+ */
+function mergeDeclarations(
+  live: readonly Declaration[],
+  edits: BlockEdits,
+): DeclarationRow[] {
+  const byName = new Map<string, DeclarationRow>();
+  for (const entry of live) byName.set(entry.name, { ...entry, enabled: true });
+  for (const entry of edits.disabled) {
+    byName.set(entry.name, { ...entry, enabled: false });
+  }
+
+  const rows: DeclarationRow[] = [];
+  for (const name of edits.order) {
+    const row = byName.get(name);
+    if (row) {
+      rows.push(row);
+      byName.delete(name);
+    }
+  }
+  rows.push(...byName.values());
+  return rows;
+}
+
+/** The authoring surface, threaded from the panel into each editable rule. */
+type StyleEditing = {
+  edit: StyleEdit | null;
+  pending: PendingDeclaration | null;
+  onStart: (edit: StyleEdit) => void;
+  /** Returns false when the edit was rejected and the editor stays open. */
+  onCommit: (edit: StyleEdit, draft: string, via: CommitVia) => boolean;
+  onCancel: () => void;
+  onToggle: (block: string, row: number, enabled: boolean) => void;
+  onDelete: (block: string, row: number) => void;
+  onStartNew: (block: string) => void;
+};
+
+/**
+ * One line of an authored rule: `[x] property: value;`.
+ *
+ * The property and the value are plain colored text until they are clicked,
+ * at which point the same text is replaced in place by an editor with
+ * identical metrics — the line never changes height and barely changes width.
+ * The checkbox in the gutter switches the declaration off without losing it;
+ * the trailing X drops it for good. Both are revealed by hovering the row, by
+ * focus, or unconditionally on a device with no hover.
+ */
+function AuthoredDeclaration({
+  row,
+  block,
+  index,
+  editing,
+}: {
+  row: DeclarationRow;
+  block: string;
+  /** The row's position, or "new" for the block's blank slot. */
+  index: number | "new";
+  editing: StyleEditing;
+}) {
+  const open = editing.edit;
+  const isOpen = (field: StyleEdit["field"]) =>
+    open?.block === block && open.row === index && open.field === field;
+
+  const start = (field: StyleEdit["field"]) => (event: React.MouseEvent) => {
+    event.stopPropagation();
+    editing.onStart({ block, row: index, field });
+  };
+
+  const editor = (
+    field: StyleEdit["field"],
+    initial: string,
+    label: string,
+  ) => (
+    <InlineEditor
+      tone={field}
+      initial={initial}
+      label={label}
+      onCommit={(draft, via) =>
+        editing.onCommit({ block, row: index, field }, draft, via)
+      }
+      onCancel={editing.onCancel}
+    />
+  );
+
+  const named = row.name || "new declaration";
+
+  return (
+    <CssDeclaration data-declaration="">
+      {index === "new" ? (
+        <DeclarationGutter />
+      ) : (
+        <DeclarationToggle $alwaysVisible={!row.enabled}>
+          <Input
+            type="checkbox"
+            id={`inspector-declaration-${block}-${row.name}`}
+            checked={row.enabled}
+            aria-label={`${row.enabled ? "Disable" : "Enable"} ${row.name}`}
+            onChange={(event) =>
+              editing.onToggle(block, index, event.target.checked)
+            }
+          />
+        </DeclarationToggle>
+      )}
+      {/* Blank space to the right of a declaration edits its value, as in
+          DevTools; the property and value spans stop their own clicks here. */}
+      <DeclarationText $disabled={!row.enabled} onClick={start("value")}>
+        {isOpen("property") ? (
+          editor("property", row.name, `Edit property name of ${named}`)
+        ) : (
+          <CssProperty $editable onClick={start("property")}>
+            {row.name || " "}
+          </CssProperty>
+        )}
+        <Punct>: </Punct>
+        {isOpen("value") ? (
+          editor("value", row.value, `Edit value of ${named}`)
+        ) : (
+          <CssValue $editable>{row.value || " "}</CssValue>
+        )}
+        <Punct>;</Punct>
+      </DeclarationText>
+      {index !== "new" && (
+        <DeclarationActions>
+          <IconButton
+            aria-label={`Delete ${row.name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              editing.onDelete(block, index);
+            }}
+          >
+            <Icon name="X" size={11} />
+          </IconButton>
+        </DeclarationActions>
+      )}
+    </CssDeclaration>
+  );
+}
+
+/**
+ * A rule the user authors into: `element.style` and the forced-state rules.
+ * Clicking anywhere that is not a declaration — the selector line, the braces,
+ * the empty space between them — starts a new declaration, the way DevTools
+ * lets you type straight into a rule. The closing brace carries the same
+ * affordance for the keyboard, where there is nothing to click with.
+ */
+function AuthoredRuleBlock({
+  id,
+  header,
+  rows,
+  label,
+  editing,
+}: {
+  id: string;
+  header: React.ReactNode;
+  rows: DeclarationRow[];
+  /** Names the rule for assistive tech, e.g. "element.style". */
+  label: string;
+  editing: StyleEditing;
+}) {
+  const pending = editing.pending?.block === id ? editing.pending : null;
+  const startNew = () => editing.onStartNew(id);
+
+  return (
+    <CssBlock
+      $editable
+      onClick={(event) => {
+        // Declarations handle their own clicks, including their blank space.
+        if ((event.target as HTMLElement).closest("[data-declaration]")) return;
+        startNew();
+      }}
+    >
+      {header}
+      {rows.map((row, index) => (
+        <AuthoredDeclaration
+          key={row.name}
+          row={row}
+          block={id}
+          index={index}
+          editing={editing}
+        />
+      ))}
+      {pending && (
+        <AuthoredDeclaration
+          row={{ name: pending.name, value: pending.value, enabled: true }}
+          block={id}
+          index="new"
+          editing={editing}
+        />
+      )}
+      <RuleFooter
+        role="button"
+        tabIndex={0}
+        aria-label={`Add a declaration to ${label}`}
+        title={`Add a declaration to ${label}`}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          startNew();
+        }}
+      >
+        <Punct>{"}"}</Punct>
+      </RuleFooter>
+    </CssBlock>
+  );
+}
+
 /* ----------------------------------------------------------------- panel */
 
 export type ElementsPanelProps = {
@@ -1010,8 +1366,7 @@ export function ElementsPanel({
   const [computedFilter, setComputedFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchIndex, setSearchIndex] = useState(0);
-  const [property, setProperty] = useState("color");
-  const [value, setValue] = useState("");
+  const [styles, setStyles] = useState<StylesState>(NO_STYLES_STATE);
   const [stateTarget, setStateTarget] = useState<PseudoState>("hover");
   const [stateProperty, setStateProperty] = useState("");
   const [stateValue, setStateValue] = useState("");
@@ -1117,9 +1472,302 @@ export function ElementsPanel({
     }
   };
 
-  const applyStyle = (event: React.FormEvent) => {
-    event.preventDefault();
-    setFeedback(onApplyStyle(property, value));
+  /* ------------------------------------------------------ style authoring */
+
+  /* The pane's own state only counts while it still describes the element on
+     screen; a new selection reads as empty without a reset pass. */
+  const styleState =
+    styles.element === selectedElement ? styles : NO_STYLES_STATE;
+
+  /**
+   * Every rule the user can author into, by id: `element.style` first, then
+   * one per pseudo-state that has declarations (or a half-typed one). Each
+   * carries its merged rows plus the host callbacks that validate and apply
+   * them, so the editing handlers below never care which kind of rule they
+   * are working on.
+   */
+  const styleBlocks: Record<string, StyleBlock> = {
+    [INLINE_BLOCK]: {
+      rows: mergeDeclarations(
+        snapshot?.inlineStyles ?? [],
+        styleState.blocks[INLINE_BLOCK] ?? NO_EDITS,
+      ),
+      apply: onApplyStyle,
+      remove: onRemoveStyle,
+    },
+  };
+
+  const stateBlocks = PSEUDO_STATES.map((state) => {
+    const id = `state:${state}`;
+    return {
+      state,
+      id,
+      rows: mergeDeclarations(
+        stateStyles[state],
+        styleState.blocks[id] ?? NO_EDITS,
+      ),
+    };
+  }).filter(
+    (block) => block.rows.length > 0 || styleState.pending?.block === block.id,
+  );
+
+  for (const block of stateBlocks) {
+    styleBlocks[block.id] = {
+      rows: block.rows,
+      apply: (name, declarationValue) =>
+        onAddStateStyle(block.state, name, declarationValue),
+      remove: (name) => {
+        onRemoveStateStyle(block.state, name);
+        return undefined;
+      },
+    };
+  }
+
+  /** Folds a change into the pane state, re-keying it to the shown element. */
+  const updateStyles = (
+    change: (current: StylesState) => Partial<StylesState>,
+  ) =>
+    setStyles((current) => {
+      const base =
+        current.element === selectedElement
+          ? current
+          : { ...NO_STYLES_STATE, element: selectedElement };
+      return { ...base, ...change(base) };
+    });
+
+  const withBlock = (
+    base: StylesState,
+    id: string,
+    update: (edits: BlockEdits) => BlockEdits,
+  ) => ({ ...base.blocks, [id]: update(base.blocks[id] ?? NO_EDITS) });
+
+  /**
+   * The enable/disable checkbox. Switching off deletes the declaration from
+   * the page — nothing else can stop an inline style applying — and parks its
+   * text here along with the order it was shown in; switching back on replays
+   * it through the same validated apply path everything else uses.
+   */
+  const toggleDeclaration = (id: string, index: number, enabled: boolean) => {
+    const block = styleBlocks[id];
+    const row = block?.rows[index];
+    if (!row) return;
+
+    if (enabled) {
+      const result = block.apply(row.name, row.value);
+      setFeedback(result);
+      if (result.error) return;
+      updateStyles((base) => ({
+        blocks: withBlock(base, id, (edits) => ({
+          ...edits,
+          disabled: edits.disabled.filter((entry) => entry.name !== row.name),
+        })),
+      }));
+      return;
+    }
+
+    const result = block.remove(row.name);
+    if (result) setFeedback(result);
+    if (result?.error) return;
+    updateStyles((base) => ({
+      edit: null,
+      blocks: withBlock(base, id, (edits) => ({
+        disabled: [...edits.disabled, { name: row.name, value: row.value }],
+        order: block.rows.map((entry) => entry.name),
+      })),
+    }));
+  };
+
+  /** The trailing X: gone from the page and from the pane's memory alike. */
+  const deleteDeclaration = (id: string, index: number) => {
+    const block = styleBlocks[id];
+    const row = block?.rows[index];
+    if (!row) return;
+
+    if (row.enabled) {
+      const result = block.remove(row.name);
+      if (result) setFeedback(result);
+      if (result?.error) return;
+    }
+    updateStyles((base) => ({
+      edit: null,
+      blocks: withBlock(base, id, (edits) => ({
+        ...edits,
+        disabled: edits.disabled.filter((entry) => entry.name !== row.name),
+      })),
+    }));
+  };
+
+  const startNewDeclaration = (id: string) =>
+    updateStyles(() => ({
+      pending: { block: id, name: "", value: "" },
+      edit: { block: id, row: "new", field: "property" },
+    }));
+
+  /**
+   * One finished inline edit. Enter and Tab keep a rejected edit open so the
+   * typo can be fixed in place; blur always closes, because the pointer has
+   * already moved on and a field that refuses to let go is worse than a lost
+   * keystroke.
+   */
+  const commitStyleEdit = (
+    edit: StyleEdit,
+    draft: string,
+    via: CommitVia,
+  ): boolean => {
+    const block = styleBlocks[edit.block];
+    if (!block) return true;
+    const text = draft.trim();
+    const abandon = () => updateStyles(() => ({ edit: null, pending: null }));
+
+    /* The blank slot: neither half is CSS on its own, so nothing reaches the
+       page until the value is committed. */
+    if (edit.row === "new") {
+      const pending = styleState.pending;
+      if (!pending || pending.block !== edit.block) return true;
+
+      if (edit.field === "property") {
+        if (!text || via === "blur" || via === "tab-back") {
+          abandon();
+          return true;
+        }
+        updateStyles(() => ({
+          pending: { ...pending, name: text },
+          edit: { ...edit, field: "value" },
+        }));
+        return true;
+      }
+
+      if (via === "tab-back") {
+        updateStyles(() => ({
+          pending: { ...pending, value: text },
+          edit: { ...edit, field: "property" },
+        }));
+        return true;
+      }
+      if (!text) {
+        abandon();
+        return true;
+      }
+
+      const result = block.apply(pending.name, text);
+      setFeedback(result);
+      if (result.error) {
+        if (via !== "blur") return false;
+        abandon();
+        return true;
+      }
+      // Enter or Tab on the last value offers the next blank slot, so a run
+      // of declarations can be typed without reaching for the pointer.
+      if (via === "blur") abandon();
+      else startNewDeclaration(edit.block);
+      return true;
+    }
+
+    /* Bound to a const: the closures below outlive this narrowing otherwise. */
+    const at = edit.row;
+    const row = block.rows[at];
+    if (!row) return true;
+    const isLast = at === block.rows.length - 1;
+
+    if (edit.field === "property") {
+      // An emptied property name removes the declaration, as in DevTools.
+      if (!text) {
+        deleteDeclaration(edit.block, at);
+        return true;
+      }
+
+      if (text !== row.name) {
+        if (row.enabled) {
+          // The new name goes on first: removing first would lose the old
+          // declaration whenever the rename turns out not to be valid CSS.
+          const result = block.apply(text, row.value);
+          setFeedback(result);
+          if (result.error) {
+            if (via !== "blur") return false;
+            updateStyles(() => ({ edit: null }));
+            return true;
+          }
+          block.remove(row.name);
+        }
+        updateStyles((base) => ({
+          blocks: withBlock(base, edit.block, (edits) => ({
+            disabled: edits.disabled.map((entry) =>
+              entry.name === row.name ? { ...entry, name: text } : entry,
+            ),
+            // A renamed declaration re-appends to the page; keep its slot.
+            order: (edits.order.length
+              ? edits.order
+              : block.rows.map((entry) => entry.name)
+            ).map((name) => (name === row.name ? text : name)),
+          })),
+        }));
+      }
+
+      updateStyles(() => ({
+        edit:
+          via === "enter" || via === "tab"
+            ? { ...edit, field: "value" }
+            : via === "tab-back" && at > 0
+              ? { block: edit.block, row: at - 1, field: "value" }
+              : null,
+      }));
+      return true;
+    }
+
+    // An emptied value removes the declaration too, the way DevTools does it.
+    if (!text) {
+      deleteDeclaration(edit.block, at);
+      return true;
+    }
+
+    if (text !== row.value) {
+      if (row.enabled) {
+        const result = block.apply(row.name, text);
+        setFeedback(result);
+        if (result.error) {
+          if (via !== "blur") return false;
+          updateStyles(() => ({ edit: null }));
+          return true;
+        }
+      } else {
+        updateStyles((base) => ({
+          blocks: withBlock(base, edit.block, (edits) => ({
+            ...edits,
+            disabled: edits.disabled.map((entry) =>
+              entry.name === row.name ? { ...entry, value: text } : entry,
+            ),
+          })),
+        }));
+      }
+    }
+
+    if (via === "tab-back") {
+      updateStyles(() => ({ edit: { ...edit, field: "property" } }));
+      return true;
+    }
+    if (via === "tab" && !isLast) {
+      updateStyles(() => ({
+        edit: { block: edit.block, row: at + 1, field: "property" },
+      }));
+      return true;
+    }
+    if (isLast && (via === "tab" || via === "enter")) {
+      startNewDeclaration(edit.block);
+      return true;
+    }
+    updateStyles(() => ({ edit: null }));
+    return true;
+  };
+
+  const styleEditing: StyleEditing = {
+    edit: styleState.edit,
+    pending: styleState.pending,
+    onStart: (edit) => updateStyles(() => ({ edit })),
+    onCommit: commitStyleEdit,
+    onCancel: () => updateStyles(() => ({ edit: null, pending: null })),
+    onToggle: toggleDeclaration,
+    onDelete: deleteDeclaration,
+    onStartNew: startNewDeclaration,
   };
 
   /** Applies a finished tree edit; false keeps the editor open to fix it. */
@@ -1366,7 +2014,7 @@ export function ElementsPanel({
                       <>
                         {treeEdit?.kind === "text" &&
                         treeEdit.element === row.element ? (
-                          <TreeInlineEditor
+                          <InlineEditor
                             initial={row.element.textContent ?? ""}
                             label={`Edit text of ${describeElement(row.element)}`}
                             onCommit={(draft, via) =>
@@ -1481,62 +2129,18 @@ export function ElementsPanel({
             </EmptyState>
           ) : sidebarTab === "styles" ? (
             <Scroller>
-              <CssBlock>
-                <CssSelector>element.style</CssSelector> <Punct>{"{"}</Punct>
-                {snapshot.inlineStyles.length === 0 ? (
-                  <NoDeclarations>no declarations</NoDeclarations>
-                ) : (
-                  snapshot.inlineStyles.map((entry) => (
-                    <CssDeclaration key={entry.name}>
-                      <DeclarationText>
-                        <CssProperty>{entry.name}</CssProperty>
-                        <Punct>: </Punct>
-                        <CssValue>{entry.value}</CssValue>
-                        <Punct>;</Punct>
-                      </DeclarationText>
-                      <DeclarationActions>
-                        <IconButton
-                          aria-label={`Delete ${entry.name}`}
-                          onClick={() => setFeedback(onRemoveStyle(entry.name))}
-                        >
-                          <Icon name="X" size={11} />
-                        </IconButton>
-                      </DeclarationActions>
-                    </CssDeclaration>
-                  ))
-                )}
-                <DeclarationEditor onSubmit={applyStyle}>
-                  <DevtoolsField $grow>
-                    <Input
-                      id="inspector-property"
-                      $size="small"
-                      $fullWidth
-                      aria-label="CSS property"
-                      placeholder="property"
-                      value={property}
-                      onChange={(event) => setProperty(event.target.value)}
-                    />
-                  </DevtoolsField>
-                  <Punct>:</Punct>
-                  <DevtoolsField $grow>
-                    <Input
-                      id="inspector-value"
-                      $size="small"
-                      $fullWidth
-                      aria-label="CSS value"
-                      placeholder="value"
-                      value={value}
-                      onChange={(event) => setValue(event.target.value)}
-                    />
-                  </DevtoolsField>
-                  <DevtoolsButtonGroup>
-                    <Button $size="small" type="submit">
-                      Add
-                    </Button>
-                  </DevtoolsButtonGroup>
-                </DeclarationEditor>
-                <Punct>{"}"}</Punct>
-              </CssBlock>
+              <AuthoredRuleBlock
+                id={INLINE_BLOCK}
+                label="element.style"
+                rows={styleBlocks[INLINE_BLOCK].rows}
+                editing={styleEditing}
+                header={
+                  <>
+                    <CssSelector>element.style</CssSelector>{" "}
+                    <Punct>{"{"}</Punct>
+                  </>
+                }
+              />
               {feedback && (
                 <Feedback $error={feedback.error} role="status">
                   {feedback.message}
@@ -1563,38 +2167,24 @@ export function ElementsPanel({
                 </StateGrid>
               </StateSection>
 
-              {PSEUDO_STATES.filter(
-                (state) => stateStyles[state].length > 0,
-              ).map((state) => (
-                <CssBlock key={`state-${state}`}>
-                  <RuleHeader>
-                    <span>
-                      <CssSelector>
-                        {snapshot.selector}:{state}
-                      </CssSelector>{" "}
-                      <Punct>{"{"}</Punct>
-                    </span>
-                  </RuleHeader>
-                  {stateStyles[state].map((entry) => (
-                    <CssDeclaration key={entry.name}>
-                      <DeclarationText>
-                        <CssProperty>{entry.name}</CssProperty>
-                        <Punct>: </Punct>
-                        <CssValue>{entry.value}</CssValue>
-                        <Punct>;</Punct>
-                      </DeclarationText>
-                      <DeclarationActions>
-                        <IconButton
-                          aria-label={`Delete ${entry.name} from :${state}`}
-                          onClick={() => onRemoveStateStyle(state, entry.name)}
-                        >
-                          <Icon name="X" size={11} />
-                        </IconButton>
-                      </DeclarationActions>
-                    </CssDeclaration>
-                  ))}
-                  <Punct>{"}"}</Punct>
-                </CssBlock>
+              {stateBlocks.map((block) => (
+                <AuthoredRuleBlock
+                  key={block.id}
+                  id={block.id}
+                  label={`${snapshot.selector}:${block.state}`}
+                  rows={block.rows}
+                  editing={styleEditing}
+                  header={
+                    <RuleHeader>
+                      <span>
+                        <CssSelector>
+                          {snapshot.selector}:{block.state}
+                        </CssSelector>{" "}
+                        <Punct>{"{"}</Punct>
+                      </span>
+                    </RuleHeader>
+                  }
+                />
               ))}
 
               <CssBlock>
@@ -1667,6 +2257,9 @@ export function ElementsPanel({
                   ) : (
                     rule.declarations.map((entry) => (
                       <CssDeclaration key={entry.name}>
+                        {/* Empty gutter: a read-only rule has no checkbox, but
+                            its property names line up with the ones that do. */}
+                        <DeclarationGutter />
                         <DeclarationText>
                           <CssProperty>{entry.name}</CssProperty>
                           <Punct>: </Punct>

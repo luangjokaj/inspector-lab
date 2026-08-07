@@ -36,6 +36,12 @@ export interface DevtoolsTokens {
   rowHeight: string;
   /** Horizontal offset added per DOM tree depth level. */
   treeIndent: string;
+  /**
+   * Smallest comfortable tap target. The inspector runs on iPads, where a
+   * 15px row is unhittable — so rows keep their density and only their hit
+   * areas grow to this, drawn as pseudo-elements that cost no layout.
+   */
+  touchTarget: string;
 
   /** Panel body background (white in light mode). */
   surface: string;
@@ -139,6 +145,7 @@ const devtoolsMetrics = {
   tabHeight: "27px",
   rowHeight: "15px",
   treeIndent: "12px",
+  touchTarget: "24px",
   highlightFill: "rgba(111, 168, 220, 0.66)",
   highlightBorder: "rgba(255, 229, 153, 0.9)",
   boxModel: {

@@ -61,6 +61,137 @@ const focusRing = css`
   }
 `;
 
+/* --------------------------------------------------------- touch & reveal */
+
+/**
+ * The visible half of a hover-revealed control. Pointer events come back with
+ * it on purpose: a control left at `opacity: 0` still swallows the click that
+ * lands on it, which on a touch screen means an invisible delete button.
+ */
+export const revealed = css`
+  opacity: 1;
+  pointer-events: auto;
+`;
+
+/**
+ * A finger-sized hit area over a control, drawn as an absolutely positioned
+ * pseudo-element so it costs no layout at all: DevTools' 15px rows keep their
+ * density on a mouse while a tap still lands on `theme.devtools.touchTarget`.
+ *
+ * `anchor` is the edge the box hangs from, so it grows *away* from that edge
+ * and into whatever empty space the control sits next to, rather than over the
+ * text beside it. Anchor towards the nearest container edge: growing past the
+ * right edge of a scroll container turns the extra pixels into a stray
+ * horizontal scrollbar (overflow to the left is not scrollable, so that side
+ * is free). The control has to be a containing block (`position: relative`).
+ */
+export const touchHitArea = (anchor: "left" | "right") => css`
+  &::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    ${anchor}: 0;
+    width: ${({ theme }) => theme.devtools.touchTarget};
+    height: ${({ theme }) => theme.devtools.touchTarget};
+    transform: translateY(-50%);
+  }
+`;
+
+/**
+ * A row-scale icon button — delete a cookie, drop a declaration. Flat and
+ * square like the rest of the chrome, and out of the way until the row is
+ * worth acting on: the consumer's own `:hover` rule reveals it (only the
+ * consumer knows its row component), focus reveals it so the keyboard never
+ * chases an invisible control, and a device with no hover shows it always.
+ * Restyles the Cherry `IconButton` from the parent, never by wrapping it.
+ *
+ * The touch hit area is left to the consumer: which way a 24px box can grow
+ * without overflowing its container is a question only the surrounding layout
+ * can answer. See `touchHitArea`.
+ */
+export const rowActionButton = (size: number) => css`
+  button {
+    position: relative;
+    width: ${size}px;
+    height: ${size}px;
+    min-width: ${size}px;
+    padding: 0;
+    color: ${({ theme }) => theme.devtools.textSubtle};
+    background: transparent;
+    border: none;
+    border-radius: 2px;
+    box-shadow: none;
+    transition: none;
+    opacity: 0;
+    pointer-events: none;
+
+    svg {
+      width: 11px;
+      height: 11px;
+    }
+
+    &:hover:not(:disabled) {
+      color: ${({ theme }) => theme.devtools.text};
+      background: ${({ theme }) => theme.devtools.tabHoverBackground};
+      border: none;
+      box-shadow: none;
+    }
+
+    &:focus,
+    &:active {
+      border: none;
+      box-shadow: none;
+    }
+
+    &:focus-visible {
+      outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+      outline-offset: -1px;
+      ${revealed};
+    }
+  }
+
+  /* No hover to reveal anything with: an iPad gets the control outright. */
+  @media (hover: none) {
+    button {
+      ${revealed};
+    }
+  }
+`;
+
+/**
+ * Compacts the Cherry checkbox rendered inside down to DevTools' 12px box.
+ * Applied from the parent, never by wrapping the Cherry component.
+ */
+export const devtoolsCheckbox = css`
+  /* Cherry wraps controls in spans; flatten them onto one line. */
+  span {
+    display: inline-flex;
+    margin: 0;
+  }
+
+  /* Doubled ampersands out-specify Cherry's own control sizing, which uses
+     the same class+descendant specificity — injection order stops mattering. */
+  && input {
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+    margin: 0;
+    accent-color: ${({ theme }) => theme.devtools.accent};
+  }
+
+  /* Cherry's check mark, shrunk to sit inside the 12px box. The min-* pair is
+     the load-bearing part: Cherry sizes the check with min-width / min-height
+     12px, which clamps any width override silently. */
+  && svg {
+    width: 8px;
+    height: 8px;
+    min-width: 8px;
+    min-height: 8px;
+    stroke-width: 4px;
+  }
+`;
+
 /* ------------------------------------------------------------------ shell */
 
 /** The whole floating window: a flat, square-cornered DevTools frame. */
@@ -472,47 +603,10 @@ export const GridRow = styled.tr<{ $selected?: boolean }>`
  */
 export const GridActionCell = styled.td`
   padding: 0;
-
-  button {
-    width: 16px;
-    height: 16px;
-    min-width: 16px;
-    padding: 0;
-    color: ${({ theme }) => theme.devtools.textSubtle};
-    background: transparent;
-    border: none;
-    border-radius: 2px;
-    box-shadow: none;
-    transition: none;
-    opacity: 0;
-
-    svg {
-      width: 11px;
-      height: 11px;
-    }
-
-    &:hover:not(:disabled) {
-      color: ${({ theme }) => theme.devtools.text};
-      background: ${({ theme }) => theme.devtools.tabHoverBackground};
-      border: none;
-      box-shadow: none;
-    }
-
-    &:focus,
-    &:active {
-      border: none;
-      box-shadow: none;
-    }
-
-    &:focus-visible {
-      outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
-      outline-offset: -1px;
-      opacity: 1;
-    }
-  }
+  ${rowActionButton(16)};
 
   ${GridRow}:hover & button {
-    opacity: 1;
+    ${revealed};
   }
 `;
 
