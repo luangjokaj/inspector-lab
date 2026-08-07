@@ -159,7 +159,9 @@ export const rowActionButton = (size: number) => css`
 `;
 
 /**
- * Compacts the Cherry checkbox rendered inside down to DevTools' 12px box.
+ * Restyles the Cherry checkbox rendered inside into DevTools' 12px box:
+ * a bare 1px outline that fills solid with the accent when checked, the
+ * same everywhere one appears — the :hov state grid, declaration gutters.
  * Applied from the parent, never by wrapping the Cherry component.
  */
 export const devtoolsCheckbox = css`
@@ -169,7 +171,7 @@ export const devtoolsCheckbox = css`
     margin: 0;
   }
 
-  /* Doubled ampersands out-specify Cherry's own control sizing, which uses
+  /* Doubled ampersands out-specify Cherry's own control styling, which uses
      the same class+descendant specificity — injection order stops mattering. */
   && input {
     width: 12px;
@@ -177,18 +179,43 @@ export const devtoolsCheckbox = css`
     min-width: 12px;
     min-height: 12px;
     margin: 0;
-    accent-color: ${({ theme }) => theme.devtools.accent};
+    background: transparent;
+    border: solid 1px ${({ theme }) => theme.devtools.textSubtle};
+    border-radius: 2px;
+    transition: none;
+
+    /* Cherry tints the border on hover and halos it on focus/active;
+       DevTools does neither — the only states are the fill and the ring. */
+    &:hover,
+    &:focus,
+    &:active {
+      border-color: ${({ theme }) => theme.devtools.textSubtle};
+      box-shadow: none;
+    }
+
+    &:focus-visible {
+      outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+      outline-offset: 1px;
+    }
+
+    &:checked {
+      background: ${({ theme }) => theme.devtools.accent};
+      border-color: ${({ theme }) => theme.devtools.accent};
+    }
   }
 
-  /* Cherry's check mark, shrunk to sit inside the 12px box. The min-* pair is
-     the load-bearing part: Cherry sizes the check with min-width / min-height
-     12px, which clamps any width override silently. */
+  /* Cherry's check mark, shrunk to sit inside the 12px box and recolored to
+     read against the accent fill. The min-* pair is the load-bearing part:
+     Cherry sizes the check with min-width / min-height 12px, which clamps
+     any width override silently. */
   && svg {
     width: 8px;
     height: 8px;
     min-width: 8px;
     min-height: 8px;
-    stroke-width: 4px;
+    color: ${({ theme }) => theme.devtools.onAccent};
+    stroke-width: 5.5px;
+    transition: none;
   }
 `;
 

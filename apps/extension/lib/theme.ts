@@ -59,6 +59,8 @@ export interface DevtoolsTokens {
   textDisabled: string;
   accent: string;
   accentSubtle: string;
+  /** Glyphs drawn on an accent fill — the checkbox's check mark. */
+  onAccent: string;
   focusRing: string;
 
   tabText: string;
@@ -171,6 +173,7 @@ const devtoolsLight: DevtoolsTokens = {
   textDisabled: "#9aa0a6",
   accent: "#0b57d0",
   accentSubtle: "rgba(11, 87, 208, 0.08)",
+  onAccent: "#ffffff",
   focusRing: "#0b57d0",
 
   tabText: "#474747",
@@ -227,6 +230,8 @@ const devtoolsDark: DevtoolsTokens = {
   textDisabled: "#8f8f8f",
   accent: "#a8c7fa",
   accentSubtle: "rgba(168, 199, 250, 0.15)",
+  /* Chrome's dark accent is light, so the check inks toward the surface. */
+  onAccent: "#1f1f1f",
   focusRing: "#a8c7fa",
 
   tabText: "#c7c7c7",
@@ -335,6 +340,8 @@ function brandDevtools(
     textDisabled: colors.gray,
     accent: colors.primary,
     accentSubtle: alpha(colors.primary, isDark ? 15 : 10),
+    /* White in both modes — the branded teals are mid-tone either way. */
+    onAccent: isDark ? colors.dark : colors.light,
     focusRing: colors.primary,
 
     tabText: colors.grayDark,
