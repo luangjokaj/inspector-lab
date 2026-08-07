@@ -1,11 +1,17 @@
 import {
+  CLEAR_SITE_COOKIES_MESSAGE,
   DELETE_COOKIE_MESSAGE,
   EVALUATE_MESSAGE,
   GET_COOKIES_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
   REQUEST_COOKIE_ACCESS_MESSAGE,
+  SET_COOKIE_MESSAGE,
   isConsoleEventName,
+  type ClearSiteCookiesRequest,
+  type ClearSiteCookiesResponse,
+  type CookieDraft,
   type CookieEntry,
+  type CookieIdentity,
   type DeleteCookieRequest,
   type DeleteCookieResponse,
   type EvaluateRequest,
@@ -16,6 +22,8 @@ import {
   type InterceptConsoleResponse,
   type RequestCookieAccessRequest,
   type RequestCookieAccessResponse,
+  type SetCookieRequest,
+  type SetCookieResponse,
 } from "~lib/messages";
 
 const PREVIEW_LIMIT = 2000;
@@ -298,6 +306,106 @@ function cookieVisibleToHost(host: string, cookieDomain: string): boolean {
   return host === bare || host.endsWith(`.${bare}`);
 }
 
+/**
+ * The URL that addresses a cookie via chrome.cookies — also the URL Chrome
+ * checks host permissions against. Domain cookies visible to the tab are
+ * addressed on the tab's own host so the per-site grant suffices (a parent
+ * domain like example.com is not covered by an app.example.com grant);
+ * anything else is addressed on the cookie's own domain, which the all-sites
+ * grant covers.
+ */
+function cookieRequestUrl(
+  tab: URL,
+  domain: string,
+  path: string,
+  secure: boolean,
+): string {
+  const bare = (domain || tab.hostname).replace(/^\./, "");
+  const host =
+    domain.startsWith(".") && cookieVisibleToHost(tab.hostname, domain)
+      ? tab.hostname
+      : bare;
+  const scheme =
+    secure || (host === tab.hostname && tab.protocol === "https:")
+      ? "https"
+      : "http";
+  return `${scheme}://${host}${path}`;
+}
+
+/** Structural check for a draft arriving over runtime messaging. */
+function isCookieDraft(value: unknown): value is CookieDraft {
+  const draft = value as Partial<CookieDraft> | null;
+  return (
+    typeof draft?.name === "string" &&
+    typeof draft.value === "string" &&
+    typeof draft.domain === "string" &&
+    typeof draft.path === "string" &&
+    (draft.expirationDate === undefined ||
+      typeof draft.expirationDate === "number") &&
+    typeof draft.httpOnly === "boolean" &&
+    typeof draft.secure === "boolean" &&
+    ["no_restriction", "lax", "strict", "unspecified"].includes(
+      draft.sameSite as string,
+    )
+  );
+}
+
+/** Structural check for the original-cookie identity of an edit. */
+function isCookieIdentity(value: unknown): value is CookieIdentity {
+  const identity = value as Partial<CookieIdentity> | null;
+  return (
+    typeof identity?.name === "string" &&
+    typeof identity.domain === "string" &&
+    typeof identity.path === "string" &&
+    identity.path.startsWith("/") &&
+    typeof identity.secure === "boolean"
+  );
+}
+
+/** RFC 6265 token characters — the only bytes legal in a cookie name. */
+const COOKIE_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]*$/;
+
+/**
+ * Rejects drafts Chrome would refuse or silently mangle, with messages the
+ * panel can show verbatim. Returns null when the draft is settable.
+ */
+function validateCookieDraft(draft: CookieDraft): string | null {
+  if (!COOKIE_NAME_PATTERN.test(draft.name)) {
+    return "Cookie names can only use letters, digits, and RFC 6265 token characters.";
+  }
+  if (draft.name === "" && draft.value === "") {
+    return "A cookie needs a name or a value.";
+  }
+  if (/[;\u0000-\u001f\u007f]/.test(draft.value)) {
+    return "Cookie values cannot contain semicolons or control characters.";
+  }
+  if (draft.name.length + draft.value.length > 4096) {
+    return "Cookies are limited to 4096 bytes of name plus value.";
+  }
+  if (!draft.path.startsWith("/")) {
+    return "Cookie paths must start with /.";
+  }
+  if (draft.sameSite === "no_restriction" && !draft.secure) {
+    return "SameSite=None cookies must also be Secure.";
+  }
+  if (
+    draft.name.startsWith("__Host-") &&
+    (!draft.secure || draft.path !== "/" || draft.domain.startsWith("."))
+  ) {
+    return "__Host- cookies must be Secure and host-only with path /.";
+  }
+  if (draft.name.startsWith("__Secure-") && !draft.secure) {
+    return "__Secure- cookies must be Secure.";
+  }
+  if (
+    draft.expirationDate !== undefined &&
+    !Number.isFinite(draft.expirationDate)
+  ) {
+    return "The expiry date could not be parsed.";
+  }
+  return null;
+}
+
 chrome.runtime.onMessage.addListener(
   (message: unknown, sender, sendResponse) => {
     const request = message as
@@ -305,12 +413,16 @@ chrome.runtime.onMessage.addListener(
       | InterceptConsoleRequest
       | GetCookiesRequest
       | DeleteCookieRequest
+      | SetCookieRequest
+      | ClearSiteCookiesRequest
       | RequestCookieAccessRequest;
     if (
       request?.type !== EVALUATE_MESSAGE &&
       request?.type !== INTERCEPT_CONSOLE_MESSAGE &&
       request?.type !== GET_COOKIES_MESSAGE &&
       request?.type !== DELETE_COOKIE_MESSAGE &&
+      request?.type !== SET_COOKIE_MESSAGE &&
+      request?.type !== CLEAR_SITE_COOKIES_MESSAGE &&
       request?.type !== REQUEST_COOKIE_ACCESS_MESSAGE
     ) {
       return;
@@ -335,6 +447,8 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ ok: false } satisfies
           | InterceptConsoleResponse
           | DeleteCookieResponse
+          | SetCookieResponse
+          | ClearSiteCookiesResponse
           | RequestCookieAccessResponse);
       }
       return;
@@ -446,16 +560,15 @@ chrome.runtime.onMessage.addListener(
 
     if (request.type === DELETE_COOKIE_MESSAGE) {
       const tabUrl = sender.tab?.url;
-      const host =
-        tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl).hostname : "";
+      const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
+      const host = tab?.hostname ?? "";
       const valid =
         typeof request.name === "string" &&
         typeof request.domain === "string" &&
         typeof request.path === "string" &&
         request.path.startsWith("/") &&
-        typeof request.secure === "boolean" &&
-        host !== "";
-      if (!valid) {
+        typeof request.secure === "boolean";
+      if (!valid || tab === null) {
         sendResponse({
           ok: false,
           error: "Cookie deletion rejected.",
@@ -478,8 +591,12 @@ chrome.runtime.onMessage.addListener(
             return;
           }
 
-          const bareDomain = request.domain.replace(/^\./, "");
-          const cookieUrl = `${request.secure ? "https" : "http"}://${bareDomain}${request.path}`;
+          const cookieUrl = cookieRequestUrl(
+            tab,
+            request.domain,
+            request.path,
+            request.secure,
+          );
           const details = await chrome.cookies.remove({
             url: cookieUrl,
             name: request.name,
@@ -494,6 +611,199 @@ chrome.runtime.onMessage.addListener(
             ok: false,
             error: describeCookieError(error, "delete the cookie"),
           } satisfies DeleteCookieResponse);
+        }
+      })();
+
+      // Keep the message channel open for the async response.
+      return true;
+    }
+
+    if (request.type === SET_COOKIE_MESSAGE) {
+      const tabUrl = sender.tab?.url;
+      const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
+      if (tab === null) {
+        sendResponse({
+          ok: false,
+          error: "Cookies can only be edited on http(s) pages.",
+        } satisfies SetCookieResponse);
+        return;
+      }
+      if (
+        !isCookieDraft(request.next) ||
+        (request.original !== null && !isCookieIdentity(request.original))
+      ) {
+        sendResponse({
+          ok: false,
+          error: "Cookie edit rejected.",
+        } satisfies SetCookieResponse);
+        return;
+      }
+      const invalid = validateCookieDraft(request.next);
+      if (invalid) {
+        sendResponse({ ok: false, error: invalid } satisfies SetCookieResponse);
+        return;
+      }
+
+      const { original, next } = request;
+      void (async () => {
+        try {
+          // Same rule as deletion: cookies the page itself sees are fair
+          // game under the per-site grant; anything else — including the
+          // cookie being moved away from — needs the all-sites grant.
+          const touched = [next.domain || tab.hostname].concat(
+            original ? [original.domain] : [],
+          );
+          const allowed =
+            touched.every((domain) =>
+              cookieVisibleToHost(tab.hostname, domain),
+            ) || (await chrome.permissions.contains({ origins: ALL_HOSTS }));
+          if (!allowed) {
+            sendResponse({
+              ok: false,
+              error: "Cookie edit rejected.",
+            } satisfies SetCookieResponse);
+            return;
+          }
+
+          // Renames and re-scopes change the cookie's identity: capture the
+          // old cookie for rollback, remove it, then write the replacement.
+          const identityChanged =
+            original !== null &&
+            (original.name !== next.name ||
+              original.domain !== next.domain ||
+              original.path !== next.path);
+          let backup: chrome.cookies.Cookie | null = null;
+          if (identityChanged && original) {
+            const originalUrl = cookieRequestUrl(
+              tab,
+              original.domain,
+              original.path,
+              original.secure,
+            );
+            backup = await chrome.cookies.get({
+              url: originalUrl,
+              name: original.name,
+            });
+            await chrome.cookies.remove({
+              url: originalUrl,
+              name: original.name,
+            });
+          }
+
+          try {
+            const written = await chrome.cookies.set({
+              url: cookieRequestUrl(tab, next.domain, next.path, next.secure),
+              name: next.name,
+              value: next.value,
+              path: next.path,
+              // A leading dot means a domain cookie; omitting `domain`
+              // makes the cookie host-only for the URL's host.
+              ...(next.domain.startsWith(".")
+                ? { domain: next.domain.replace(/^\./, "") }
+                : {}),
+              ...(next.expirationDate !== undefined
+                ? { expirationDate: next.expirationDate }
+                : {}),
+              httpOnly: next.httpOnly,
+              secure: next.secure,
+              sameSite: next.sameSite,
+            });
+            if (!written) throw new Error("Chrome rejected the cookie.");
+            sendResponse({ ok: true } satisfies SetCookieResponse);
+          } catch (error) {
+            // Restore the removed original so a failed rename never turns
+            // into a silent delete.
+            if (backup) {
+              await chrome.cookies
+                .set({
+                  url: cookieRequestUrl(
+                    tab,
+                    backup.domain,
+                    backup.path,
+                    backup.secure,
+                  ),
+                  name: backup.name,
+                  value: backup.value,
+                  path: backup.path,
+                  ...(backup.hostOnly
+                    ? {}
+                    : { domain: backup.domain.replace(/^\./, "") }),
+                  ...(backup.session || backup.expirationDate === undefined
+                    ? {}
+                    : { expirationDate: backup.expirationDate }),
+                  httpOnly: backup.httpOnly,
+                  secure: backup.secure,
+                  sameSite: backup.sameSite,
+                })
+                .catch(() => undefined);
+            }
+            sendResponse({
+              ok: false,
+              error: describeCookieError(error, "save the cookie"),
+            } satisfies SetCookieResponse);
+          }
+        } catch (error) {
+          sendResponse({
+            ok: false,
+            error: describeCookieError(error, "save the cookie"),
+          } satisfies SetCookieResponse);
+        }
+      })();
+
+      // Keep the message channel open for the async response.
+      return true;
+    }
+
+    if (request.type === CLEAR_SITE_COOKIES_MESSAGE) {
+      const tabUrl = sender.tab?.url;
+      const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
+      if (tab === null) {
+        sendResponse({
+          ok: false,
+          error: "Cookies can only be cleared on http(s) pages.",
+        } satisfies ClearSiteCookiesResponse);
+        return;
+      }
+
+      void (async () => {
+        try {
+          const granted = await chrome.permissions.contains({
+            origins: [`${tab.origin}/*`],
+          });
+          if (!granted) {
+            sendResponse({
+              ok: false,
+              error: "Cookie access has not been granted for this site.",
+            } satisfies ClearSiteCookiesResponse);
+            return;
+          }
+
+          // Always scoped to what this page can see, never the whole profile.
+          const cookies = await chrome.cookies.getAll({ url: tab.href });
+          let removed = 0;
+          for (const cookie of cookies) {
+            const result = await chrome.cookies
+              .remove({
+                url: cookieRequestUrl(
+                  tab,
+                  cookie.domain,
+                  cookie.path,
+                  cookie.secure,
+                ),
+                name: cookie.name,
+              })
+              .catch(() => null);
+            if (result) removed += 1;
+          }
+          sendResponse({
+            ok: true,
+            removed,
+          } satisfies ClearSiteCookiesResponse);
+        } catch (error) {
+          sendResponse({
+            ok: false,
+            error: describeCookieError(error, "clear cookies"),
+          } satisfies ClearSiteCookiesResponse);
         }
       })();
 

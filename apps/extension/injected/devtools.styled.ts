@@ -609,14 +609,17 @@ export const DevtoolsField = styled.div<{
     min-width: 0;
   }
 
-  ${({ $plain, theme }) =>
+  ${({ $plain }) =>
     $plain &&
     css`
+      /* Borderless and font-transparent: the surrounding surface decides the
+         face — mono in the console's PromptRow, the grid font in a cell. */
       input {
         height: 100%;
         min-height: 16px;
         padding: 0;
-        font-family: ${theme.devtools.monoFamily};
+        font-family: inherit;
+        font-size: inherit;
         background: transparent;
         border: none;
 

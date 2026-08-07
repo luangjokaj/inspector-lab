@@ -113,6 +113,65 @@ export type DeleteCookieResponse = {
   error?: string;
 };
 
+export const SET_COOKIE_MESSAGE = "inspector-lab/set-cookie" as const;
+
+/** The fields that identify an existing cookie to chrome.cookies. */
+export type CookieIdentity = Pick<
+  CookieEntry,
+  "name" | "domain" | "path" | "secure"
+>;
+
+/**
+ * A cookie as the editor wants it to exist. `domain` follows the cookie
+ * store's own convention: a leading dot means a domain cookie, a bare value
+ * (or "" for the tab's host) means host-only.
+ */
+export type CookieDraft = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  /** Unix seconds; absent for session cookies. */
+  expirationDate?: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: CookieEntry["sameSite"];
+};
+
+/**
+ * Creates (original: null) or rewrites a cookie. When the edit changes the
+ * cookie's identity (name/domain/path), the background removes the original
+ * and restores it if writing the replacement fails.
+ */
+export type SetCookieRequest = {
+  type: typeof SET_COOKIE_MESSAGE;
+  original: CookieIdentity | null;
+  next: CookieDraft;
+};
+
+export type SetCookieResponse = {
+  ok: boolean;
+  error?: string;
+};
+
+export const CLEAR_SITE_COOKIES_MESSAGE =
+  "inspector-lab/clear-site-cookies" as const;
+
+/**
+ * Deletes every cookie the sender tab's page can see. Deliberately scoped to
+ * the site even when the panel lists all domains — a one-click wipe of the
+ * whole profile is a footgun DevTools does not offer either.
+ */
+export type ClearSiteCookiesRequest = {
+  type: typeof CLEAR_SITE_COOKIES_MESSAGE;
+};
+
+export type ClearSiteCookiesResponse = {
+  ok: boolean;
+  removed?: number;
+  error?: string;
+};
+
 const CONSOLE_EVENT_PREFIX = "inspector-lab-console:";
 
 /**

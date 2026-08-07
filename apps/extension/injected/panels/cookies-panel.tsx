@@ -16,11 +16,15 @@ import {
   ToolbarControls,
   ToolbarDivider,
 } from "~injected/devtools.styled";
+import { EditableCell } from "~injected/panels/editable-cell";
 import type {
+  ClearSiteCookiesResponse,
+  CookieDraft,
   CookieEntry,
   DeleteCookieResponse,
   GetCookiesResponse,
   RequestCookieAccessResponse,
+  SetCookieResponse,
 } from "~lib/messages";
 
 const SCOPES: { id: CookieScope; label: string }[] = [
@@ -66,18 +70,19 @@ const CookieGrid = styled(DataGrid)`
   }
 `;
 
-const NameCell = styled.td`
-  color: ${({ theme }) => theme.devtools.text};
-`;
-
 const MutedCell = styled.td`
   color: ${({ theme }) => theme.devtools.textSubtle};
 `;
 
-/** ✓ marks for HttpOnly / Secure, centered as DevTools renders them. */
+/** ✓ marks for HttpOnly / Secure; double-click toggles the flag. */
 const FlagCell = styled.td`
   color: ${({ theme }) => theme.devtools.textSubtle};
   text-align: center;
+`;
+
+/** Cells of the add-cookie draft row, edit-ready without a double-click. */
+const DraftCell = styled.td`
+  color: ${({ theme }) => theme.devtools.text};
 `;
 
 /** Shown instead of the table when the per-site grant is missing. */
@@ -126,9 +131,51 @@ function cookieKey(cookie: CookieEntry): string {
   return `${cookie.domain}|${cookie.path}|${cookie.name}`;
 }
 
+/** The cookie as an editable draft — the base every cell edit patches. */
+function draftFrom(cookie: CookieEntry): CookieDraft {
+  return {
+    name: cookie.name,
+    value: cookie.value,
+    domain: cookie.domain,
+    path: cookie.path,
+    expirationDate: cookie.expirationDate,
+    httpOnly: cookie.httpOnly,
+    secure: cookie.secure,
+    sameSite: cookie.sameSite,
+  };
+}
+
+/** "Session" (or empty) → session cookie; anything Date.parse accepts → Unix
+ *  seconds; null → unparseable. */
+function parseExpires(text: string): { expirationDate?: number } | null {
+  const trimmed = text.trim();
+  if (!trimmed || /^session$/i.test(trimmed)) return {};
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) return null;
+  return { expirationDate: parsed / 1000 };
+}
+
+function parseSameSite(text: string): CookieEntry["sameSite"] | null {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return "unspecified";
+  if (normalized === "strict") return "strict";
+  if (normalized === "lax") return "lax";
+  if (normalized === "none" || normalized === "no_restriction") {
+    return "no_restriction";
+  }
+  return null;
+}
+
 export type CookiesPanelProps = {
   loadCookies: (scope: CookieScope) => Promise<GetCookiesResponse>;
   deleteCookie: (cookie: CookieEntry) => Promise<DeleteCookieResponse>;
+  /** Creates (original: null) or rewrites a cookie via the background. */
+  saveCookie: (
+    original: CookieEntry | null,
+    next: CookieDraft,
+  ) => Promise<SetCookieResponse>;
+  /** Deletes every cookie this site can see — never the whole profile. */
+  clearCookies: () => Promise<ClearSiteCookiesResponse>;
   /** Prompts for the host permission the chosen cookie scope needs. */
   requestAccess: (scope: CookieScope) => Promise<RequestCookieAccessResponse>;
 };
@@ -136,6 +183,8 @@ export type CookiesPanelProps = {
 export function CookiesPanel({
   loadCookies,
   deleteCookie,
+  saveCookie,
+  clearCookies,
   requestAccess,
 }: CookiesPanelProps) {
   const [scope, setScope] = useState<CookieScope>("all");
@@ -143,6 +192,10 @@ export function CookiesPanel({
   const [granted, setGranted] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [draftRow, setDraftRow] = useState<{
+    name: string;
+    value: string;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     const response = await loadCookies(scope);
@@ -189,6 +242,75 @@ export function CookiesPanel({
     await refresh();
   };
 
+  const save = async (original: CookieEntry | null, next: CookieDraft) => {
+    const response = await saveCookie(original, next);
+    if (!response.ok) {
+      setError(response.error ?? "The cookie could not be saved.");
+      return false;
+    }
+    setError(null);
+    await refresh();
+    return true;
+  };
+
+  /** One edited column, everything else carried over unchanged. */
+  const saveField = (cookie: CookieEntry, patch: Partial<CookieDraft>) => {
+    void save(cookie, { ...draftFrom(cookie), ...patch });
+  };
+
+  const saveExpires = (cookie: CookieEntry, text: string) => {
+    const parsed = parseExpires(text);
+    if (parsed === null) {
+      setError('Use an ISO date like 2027-01-01T00:00:00Z, or "Session".');
+      return;
+    }
+    void save(cookie, {
+      ...draftFrom(cookie),
+      expirationDate: undefined,
+      ...parsed,
+    });
+  };
+
+  const saveSameSite = (cookie: CookieEntry, text: string) => {
+    const parsed = parseSameSite(text);
+    if (parsed === null) {
+      setError("SameSite must be Strict, Lax, None, or empty.");
+      return;
+    }
+    saveField(cookie, { sameSite: parsed });
+  };
+
+  const commitDraftRow = async () => {
+    if (draftRow === null) return;
+    if (!draftRow.name && !draftRow.value) {
+      setDraftRow(null);
+      return;
+    }
+    // Host-only for this site, path /, session — every other column can be
+    // edited in place once the cookie exists.
+    const created = await save(null, {
+      name: draftRow.name,
+      value: draftRow.value,
+      domain: "",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "unspecified",
+    });
+    // A rejected draft stays visible for correction.
+    if (created) setDraftRow(null);
+  };
+
+  const clearAll = async () => {
+    const response = await clearCookies();
+    if (!response.ok) {
+      setError(response.error ?? "Cookies could not be cleared.");
+      return;
+    }
+    setError(null);
+    await refresh();
+  };
+
   const visible = (cookies ?? []).filter((cookie) => {
     const needle = filter.trim().toLowerCase();
     if (!needle) return true;
@@ -202,12 +324,28 @@ export function CookiesPanel({
     0,
   );
 
+  const showGrid = visible.length > 0 || draftRow !== null;
+
   return (
     <Panel>
       <PanelToolbar>
         <ToolbarControls>
           <IconButton aria-label="Refresh cookie list" onClick={refresh}>
             <Icon name="RefreshCw" size={14} />
+          </IconButton>
+          <IconButton
+            aria-label="Add cookie"
+            disabled={!granted}
+            onClick={() => setDraftRow({ name: "", value: "" })}
+          >
+            <Icon name="Plus" size={14} />
+          </IconButton>
+          <IconButton
+            aria-label="Clear this site's cookies"
+            disabled={!granted}
+            onClick={() => void clearAll()}
+          >
+            <Icon name="Ban" size={14} />
           </IconButton>
         </ToolbarControls>
         <ToolbarDivider />
@@ -258,7 +396,7 @@ export function CookiesPanel({
               </Button>
             </DevtoolsButtonGroup>
           </AccessPrompt>
-        ) : visible.length === 0 ? (
+        ) : !showGrid ? (
           <EmptyState>
             {filter.trim()
               ? "No cookies match the filter."
@@ -283,19 +421,61 @@ export function CookiesPanel({
             <tbody>
               {visible.map((cookie) => (
                 <GridRow key={cookieKey(cookie)}>
-                  <NameCell title={cookie.name}>{cookie.name}</NameCell>
-                  <MutedCell title={cookie.value}>{cookie.value}</MutedCell>
-                  <MutedCell title={cookie.domain}>{cookie.domain}</MutedCell>
-                  <MutedCell title={cookie.path}>{cookie.path}</MutedCell>
-                  <MutedCell title={expiresLabel(cookie)}>
-                    {expiresLabel(cookie)}
-                  </MutedCell>
+                  <EditableCell
+                    value={cookie.name}
+                    label={`Edit name of cookie ${cookie.name}`}
+                    onCommit={(next) => saveField(cookie, { name: next })}
+                  />
+                  <EditableCell
+                    value={cookie.value}
+                    label={`Edit value of cookie ${cookie.name}`}
+                    muted
+                    onCommit={(next) => saveField(cookie, { value: next })}
+                  />
+                  <EditableCell
+                    value={cookie.domain}
+                    label={`Edit domain of cookie ${cookie.name}`}
+                    muted
+                    onCommit={(next) => saveField(cookie, { domain: next })}
+                  />
+                  <EditableCell
+                    value={cookie.path}
+                    label={`Edit path of cookie ${cookie.name}`}
+                    muted
+                    onCommit={(next) => saveField(cookie, { path: next })}
+                  />
+                  <EditableCell
+                    value={expiresLabel(cookie)}
+                    label={`Edit expiry of cookie ${cookie.name}`}
+                    muted
+                    onCommit={(next) => saveExpires(cookie, next)}
+                  />
                   <MutedCell>
                     {cookie.name.length + cookie.value.length}
                   </MutedCell>
-                  <FlagCell>{cookie.httpOnly ? "✓" : ""}</FlagCell>
-                  <FlagCell>{cookie.secure ? "✓" : ""}</FlagCell>
-                  <MutedCell>{SAME_SITE_LABELS[cookie.sameSite]}</MutedCell>
+                  <FlagCell
+                    title="Double-click to toggle HttpOnly"
+                    onDoubleClick={() =>
+                      saveField(cookie, { httpOnly: !cookie.httpOnly })
+                    }
+                  >
+                    {cookie.httpOnly ? "✓" : ""}
+                  </FlagCell>
+                  <FlagCell
+                    title="Double-click to toggle Secure"
+                    onDoubleClick={() =>
+                      saveField(cookie, { secure: !cookie.secure })
+                    }
+                  >
+                    {cookie.secure ? "✓" : ""}
+                  </FlagCell>
+                  <EditableCell
+                    value={SAME_SITE_LABELS[cookie.sameSite]}
+                    label={`Edit SameSite of cookie ${cookie.name}`}
+                    muted
+                    placeholder="Strict, Lax, None"
+                    onCommit={(next) => saveSameSite(cookie, next)}
+                  />
                   <GridActionCell>
                     <IconButton
                       aria-label={`Delete cookie ${cookie.name}`}
@@ -306,6 +486,72 @@ export function CookiesPanel({
                   </GridActionCell>
                 </GridRow>
               ))}
+              {draftRow !== null && (
+                <GridRow
+                  onBlur={(event) => {
+                    // Commit only when focus leaves the whole draft row, not
+                    // when it hops from the name input to the value input.
+                    if (
+                      !event.currentTarget.contains(
+                        event.relatedTarget as Node | null,
+                      )
+                    ) {
+                      void commitDraftRow();
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void commitDraftRow();
+                    }
+                    if (event.key === "Escape") {
+                      event.stopPropagation();
+                      setDraftRow(null);
+                    }
+                  }}
+                >
+                  <DraftCell>
+                    <DevtoolsField $grow $plain>
+                      <Input
+                        $size="small"
+                        $fullWidth
+                        autoFocus
+                        aria-label="New cookie name"
+                        placeholder="Name"
+                        value={draftRow.name}
+                        onChange={(event) =>
+                          setDraftRow({ ...draftRow, name: event.target.value })
+                        }
+                      />
+                    </DevtoolsField>
+                  </DraftCell>
+                  <DraftCell>
+                    <DevtoolsField $grow $plain>
+                      <Input
+                        $size="small"
+                        $fullWidth
+                        aria-label="New cookie value"
+                        placeholder="Value"
+                        value={draftRow.value}
+                        onChange={(event) =>
+                          setDraftRow({
+                            ...draftRow,
+                            value: event.target.value,
+                          })
+                        }
+                      />
+                    </DevtoolsField>
+                  </DraftCell>
+                  <MutedCell>{window.location.hostname}</MutedCell>
+                  <MutedCell>/</MutedCell>
+                  <MutedCell>Session</MutedCell>
+                  <MutedCell />
+                  <FlagCell />
+                  <FlagCell />
+                  <MutedCell />
+                  <td />
+                </GridRow>
+              )}
             </tbody>
           </CookieGrid>
         )}
