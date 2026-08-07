@@ -11,6 +11,8 @@
 
 A movable, resizable in-page inspector built as a Manifest V3 Chrome extension. Open source under the MIT license.
 
+![Inspector Lab - DevTools](https://files.riangle.com/inspector-lab/inspector-lab-devtools.png)
+
 **[What is Inspector Lab - DevTools, and why I built it →](docs/ABOUT.md)** — devtools for the agent-orchestration era: full inspection on any device that runs a browser extension, iPad included.
 
 ## Features
