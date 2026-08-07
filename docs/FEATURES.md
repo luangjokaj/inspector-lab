@@ -61,9 +61,9 @@ Inspector Lab is a movable, resizable devtools window that lives directly on the
 
 ## Theming
 
-- The inspector mirrors Chrome DevTools' own look by default — light and dark, following your OS preference live.
-- Prefer the extension's own branding? Flip **"Use custom inspector theme"** in the popup and the inspector reskins to Inspector Lab's teal-and-amber palette, derived entirely from the same design tokens as the popup. The switch applies live to an open inspector and is remembered.
-- The popup itself has its own light/dark toggle.
+- The inspector ships in Inspector Lab's own theme by default — the teal-and-amber palette derived from the same design tokens as the popup, in both light and dark.
+- **Light/dark follows the popup's theme toggle**: flip the popup to light and an open inspector rethemes live; until you make a choice, the OS preference decides.
+- Prefer the classic look? Turn **"Use custom inspector theme"** off in the popup and the inspector mirrors Chrome DevTools' own colors exactly — also live, also remembered.
 
 ## Privacy and security posture
 

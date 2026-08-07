@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import styled from "styled-components";
+import styled, { useTheme } from "styled-components";
 import {
   Button,
   Callout,
@@ -14,7 +14,11 @@ import {
 } from "cherry-styled-components";
 import inspectorBundleUrl from "url:./injected/inspector-entry.tsx";
 import { ThemeProvider } from "~lib/ThemeProvider";
-import { readCustomThemeSetting, saveCustomThemeSetting } from "~lib/settings";
+import {
+  readCustomThemeSetting,
+  saveColorSchemeSetting,
+  saveCustomThemeSetting,
+} from "~lib/settings";
 
 import "./popup.css";
 
@@ -117,10 +121,23 @@ async function requestCookieAccess(tabUrl: string): Promise<boolean> {
   }
 }
 
+/**
+ * Mirrors the popup's light/dark choice (Cherry's ThemeToggle persists it in
+ * popup-page localStorage only) into chrome.storage.local, so the injected
+ * inspector follows the same mode. Must render inside the ThemeProvider.
+ */
+function ColorSchemeSync() {
+  const theme = useTheme();
+  useEffect(() => {
+    void saveColorSchemeSetting(theme.isDark ? "dark" : "light");
+  }, [theme.isDark]);
+  return null;
+}
+
 function Popup() {
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
   const [message, setMessage] = useState("");
-  const [customTheme, setCustomTheme] = useState(false);
+  const [customTheme, setCustomTheme] = useState(true);
 
   useEffect(() => {
     void readCustomThemeSetting().then(setCustomTheme);
@@ -191,6 +208,7 @@ function Popup() {
 
   return (
     <ThemeProvider>
+      <ColorSchemeSync />
       <PopupShell>
         <Header>
           <Flex $alignItems="center" $justifyContent="space-between" $gap={12}>

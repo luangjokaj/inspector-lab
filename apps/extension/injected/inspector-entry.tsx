@@ -15,7 +15,13 @@ import styled, {
 } from "styled-components";
 import { Icon, IconButton } from "cherry-styled-components";
 import { resolveInspectorTheme } from "~lib/theme";
-import { readCustomThemeSetting, watchCustomThemeSetting } from "~lib/settings";
+import {
+  readColorSchemeSetting,
+  readCustomThemeSetting,
+  watchColorSchemeSetting,
+  watchCustomThemeSetting,
+  type InspectorColorScheme,
+} from "~lib/settings";
 import {
   InspectorWindow,
   PanelHost,
@@ -1462,9 +1468,10 @@ function Inspector({ host }: { host: HTMLElement }) {
 }
 
 /**
- * Owns the theme choice: OS light/dark (live, via matchMedia change events)
- * crossed with the popup's "custom inspector theme" toggle (live, via
- * chrome.storage.onChanged — flipping the toggle rethemes an open inspector).
+ * Owns the theme choice: the popup's light/dark toggle when a choice was
+ * made (live, mirrored through chrome.storage), the OS preference until
+ * then, crossed with the "custom inspector theme" toggle (branded is the
+ * default; off mirrors Chrome DevTools' own look).
  *
  * Cherry's own providers persist the choice by toggling a `dark` class on
  * <html> and writing localStorage — on the host page, which the inspector must
@@ -1472,15 +1479,19 @@ function Inspector({ host }: { host: HTMLElement }) {
  * styled-components.
  */
 function InspectorRoot({ host }: { host: HTMLElement }) {
-  const [isDark, setIsDark] = useState(
+  const [osPrefersDark, setOsPrefersDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
-  const [branded, setBranded] = useState(false);
+  const [schemeChoice, setSchemeChoice] = useState<InspectorColorScheme | null>(
+    null,
+  );
+  const [branded, setBranded] = useState(true);
 
   useEffect(() => {
     const query = window.matchMedia?.("(prefers-color-scheme: dark)");
     if (!query) return;
-    const onChange = (event: MediaQueryListEvent) => setIsDark(event.matches);
+    const onChange = (event: MediaQueryListEvent) =>
+      setOsPrefersDark(event.matches);
     query.addEventListener("change", onChange);
     return () => query.removeEventListener("change", onChange);
   }, []);
@@ -1490,13 +1501,20 @@ function InspectorRoot({ host }: { host: HTMLElement }) {
     void readCustomThemeSetting().then((enabled) => {
       if (!cancelled) setBranded(enabled);
     });
-    const unwatch = watchCustomThemeSetting(setBranded);
+    void readColorSchemeSetting().then((scheme) => {
+      if (!cancelled) setSchemeChoice(scheme);
+    });
+    const unwatchTheme = watchCustomThemeSetting(setBranded);
+    const unwatchScheme = watchColorSchemeSetting(setSchemeChoice);
     return () => {
       cancelled = true;
-      unwatch();
+      unwatchTheme();
+      unwatchScheme();
     };
   }, []);
 
+  const isDark =
+    schemeChoice !== null ? schemeChoice === "dark" : osPrefersDark;
   const activeTheme = resolveInspectorTheme(isDark, branded);
 
   /* Native controls (selects, scrollbars) in the shadow root follow this. */

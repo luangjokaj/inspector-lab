@@ -15,7 +15,7 @@ Highlights:
 - Picks and highlights elements, applies validated inline CSS, and shows computed styles with a box-model diagram.
 - Captures page console output and evaluates expressions in the page context.
 - Lists sources and network requests; edits cookies and local/session storage in place, DevTools-style.
-- Ships with the Chrome DevTools look by default, with an optional custom Inspector Lab theme.
+- Ships in Inspector Lab's own theme, light and dark, following the popup's theme toggle — with a one-switch fallback to the classic Chrome DevTools look.
 
 ## Development
 
