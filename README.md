@@ -4,7 +4,7 @@ A movable, resizable in-page inspector built as a Manifest V3 Chrome extension.
 
 ## Features
 
-Inspector Lab drops a DevTools-style window directly onto the page: an Elements panel with live styles and computed values, console capture and evaluation, sources and network views, and fully editable cookies and storage — floating or docked, themed light and dark.
+Inspector Lab drops a DevTools-style window directly onto the page: an Elements panel with live styles, forced element states, and computed values, console capture and evaluation, sources and network views, and fully editable cookies and storage — floating or docked, themed light and dark, and persistent across reloads until you close it.
 
 **[Read the full feature tour →](docs/FEATURES.md)**
 
@@ -37,4 +37,4 @@ The production extension is emitted to `apps/extension/build/chrome-mv3-prod`.
 
 ## Current boundaries
 
-Console history starts at inspector launch, network rows come from the Performance timeline (no request/response bodies), and cross-origin iframes, CSP-blocked `eval`, and protected `chrome://` pages remain out of reach. The full list lives at the end of [docs/FEATURES.md](docs/FEATURES.md).
+Console capture from page boot needs the per-site grant (elsewhere history starts at launch), network rows come from the Performance timeline (no request/response bodies), and cross-origin iframes, CSP-blocked `eval`, and protected `chrome://` pages remain out of reach. The full list lives at the end of [docs/FEATURES.md](docs/FEATURES.md).
