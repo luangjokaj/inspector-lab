@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -34,7 +35,17 @@ import {
   isInspectorNode,
   snapshotElement,
   type ElementSnapshot,
+  type MatchedRule,
 } from "~injected/inspector-dom";
+import {
+  applyStateStyles,
+  clearStateStyles,
+  emptyStateStyles,
+  noStatesForced,
+  type ForcedStateMap,
+  type PseudoState,
+  type StateStyleMap,
+} from "~injected/state-styles";
 import {
   CLEAR_SITE_COOKIES_MESSAGE,
   DELETE_COOKIE_MESSAGE,
@@ -43,6 +54,7 @@ import {
   INTERCEPT_CONSOLE_MESSAGE,
   REQUEST_COOKIE_ACCESS_MESSAGE,
   SET_COOKIE_MESSAGE,
+  TRACK_INSPECTOR_MESSAGE,
   randomConsoleEventName,
   type CapturedConsolePayload,
   type ClearSiteCookiesRequest,
@@ -62,6 +74,8 @@ import {
   type RequestCookieAccessResponse,
   type SetCookieRequest,
   type SetCookieResponse,
+  type TrackInspectorRequest,
+  type TrackInspectorResponse,
 } from "~lib/messages";
 import { ElementsPanel } from "~injected/panels/elements-panel";
 import {
@@ -69,7 +83,10 @@ import {
   type ConsoleEntry,
   type ConsoleLevel,
 } from "~injected/panels/console-panel";
-import { SourcesPanel } from "~injected/panels/sources-panel";
+import {
+  SourcesPanel,
+  type SourceRevealRequest,
+} from "~injected/panels/sources-panel";
 import { NetworkPanel } from "~injected/panels/network-panel";
 import { CookiesPanel } from "~injected/panels/cookies-panel";
 import { StoragePanel } from "~injected/panels/storage-panel";
@@ -440,6 +457,27 @@ async function clearSiteCookies(): Promise<ClearSiteCookiesResponse> {
   }
 }
 
+/**
+ * Tells the background this tab's inspector opened or closed (X button).
+ * Open tabs are re-injected after reloads and get the document_start console
+ * prehook registered. `activeTab` persists the active panel per site; an
+ * open call without it gets the site's remembered panel echoed back.
+ * Best-effort: a dead extension runtime resolves to undefined, never throws.
+ */
+function trackInspector(
+  open: boolean,
+  activeTab?: TabName,
+): Promise<TrackInspectorResponse | undefined> {
+  const request: TrackInspectorRequest = {
+    type: TRACK_INSPECTOR_MESSAGE,
+    open,
+    ...(activeTab !== undefined ? { activeTab } : {}),
+  };
+  return chrome.runtime.sendMessage(request).catch(() => undefined) as Promise<
+    TrackInspectorResponse | undefined
+  >;
+}
+
 async function requestCookieAccess(
   scope: CookieScope,
 ): Promise<RequestCookieAccessResponse> {
@@ -496,6 +534,19 @@ function Inspector({ host }: { host: HTMLElement }) {
   const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(
     null,
   );
+  const [forcedStates, setForcedStates] =
+    useState<ForcedStateMap>(noStatesForced);
+  const [stateStylesByElement, setStateStylesByElement] = useState<
+    Map<HTMLElement, StateStyleMap>
+  >(() => new Map());
+  const [sourceReveal, setSourceReveal] = useState<SourceRevealRequest | null>(
+    null,
+  );
+  /** Bumped on every re-show so the state stylesheet is rebuilt after hide. */
+  const [shownTick, setShownTick] = useState(0);
+  const revealSeq = useRef(0);
+  /** Once the user picks a panel, the restored per-site panel never wins. */
+  const userPickedTab = useRef(false);
   const [entries, setEntries] = useState<ConsoleEntry[]>([
     {
       id: 0,
@@ -605,6 +656,9 @@ function Inspector({ host }: { host: HTMLElement }) {
   useEffect(() => {
     const show = () => {
       host.style.display = "block";
+      // Re-opening re-arms persistence and rebuilds the state stylesheet.
+      trackInspector(true);
+      setShownTick((current) => current + 1);
       setFrame((current) => ({
         ...current,
         left: clamp(
@@ -677,6 +731,123 @@ function Inspector({ host }: { host: HTMLElement }) {
     [themeTokens],
   );
 
+  /* ---------------------------------------------------- forced states */
+
+  /* Forcing is per-selection, as in DevTools; authored styles persist. */
+  useEffect(() => setForcedStates(noStatesForced()), [selectedElement]);
+
+  const selectedStateStyles = useMemo(
+    () =>
+      (selectedElement
+        ? stateStylesByElement.get(selectedElement)
+        : undefined) ?? emptyStateStyles(),
+    [selectedElement, stateStylesByElement],
+  );
+
+  /* Rebuild the page-side forced-state stylesheet on any relevant change. */
+  useEffect(() => {
+    if (!selectedElement) {
+      clearStateStyles();
+      return;
+    }
+    applyStateStyles(selectedElement, forcedStates, selectedStateStyles);
+  }, [selectedElement, forcedStates, selectedStateStyles, shownTick]);
+
+  /* The stylesheet must never outlive the inspector. */
+  useEffect(() => () => clearStateStyles(), []);
+
+  const toggleForcedState = useCallback(
+    (state: PseudoState, forced: boolean) => {
+      setForcedStates((current) => ({ ...current, [state]: forced }));
+    },
+    [],
+  );
+
+  function addStateStyle(state: PseudoState, property: string, value: string) {
+    const element = selectedElement;
+    const trimmedProperty = property.trim();
+    const trimmedValue = value.trim();
+
+    if (!element || !trimmedProperty || !trimmedValue) {
+      const message = "Choose an element and enter a CSS rule.";
+      log("error", message);
+      return { error: true, message };
+    }
+    if (!CSS.supports(trimmedProperty, trimmedValue)) {
+      const message = "That property/value pair is not valid CSS.";
+      log("error", message);
+      return { error: true, message };
+    }
+
+    setStateStylesByElement((current) => {
+      const next = new Map(current);
+      const styles = next.get(element) ?? emptyStateStyles();
+      next.set(element, {
+        ...styles,
+        [state]: [
+          ...styles[state].filter((entry) => entry.name !== trimmedProperty),
+          { name: trimmedProperty, value: trimmedValue },
+        ],
+      });
+      return next;
+    });
+
+    const message = `${trimmedProperty}: ${trimmedValue} added to :${state} on ${describeElement(element)}`;
+    log("log", message);
+    return { error: false, message };
+  }
+
+  function removeStateStyle(state: PseudoState, propertyName: string) {
+    const element = selectedElement;
+    if (!element) return;
+    setStateStylesByElement((current) => {
+      const styles = current.get(element);
+      if (!styles) return current;
+      const next = new Map(current);
+      next.set(element, {
+        ...styles,
+        [state]: styles[state].filter((entry) => entry.name !== propertyName),
+      });
+      return next;
+    });
+  }
+
+  /** User-driven panel switch: applied, marked, and persisted per site. */
+  const selectTab = useCallback((name: TabName) => {
+    userPickedTab.current = true;
+    setTab(name);
+    void trackInspector(true, name);
+  }, []);
+
+  /* Styles-pane source links jump to the rule's file in the Sources tab. */
+  const openSource = useCallback(
+    (rule: MatchedRule) => {
+      revealSeq.current += 1;
+      setSourceReveal({
+        href: rule.sourceHref,
+        inlineIndex: rule.inlineIndex,
+        seq: revealSeq.current,
+      });
+      selectTab("Sources");
+    },
+    [selectTab],
+  );
+
+  /* Mark this tab as open so reloads bring the inspector back until X, and
+     restore the site's remembered panel unless the user already picked one. */
+  useEffect(() => {
+    void trackInspector(true).then((response) => {
+      const saved = response?.activeTab;
+      if (
+        !userPickedTab.current &&
+        typeof saved === "string" &&
+        (TABS as readonly string[]).includes(saved)
+      ) {
+        setTab(saved as TabName);
+      }
+    });
+  }, []);
+
   /* Launch with <body> selected so the panels are never empty on arrival. */
   const didAutoSelect = useRef(false);
   useEffect(() => {
@@ -736,7 +907,7 @@ function Inspector({ host }: { host: HTMLElement }) {
       event.preventDefault();
       event.stopPropagation();
       selectElement(candidate);
-      setTab("Elements");
+      selectTab("Elements");
       setPicking(false);
     };
 
@@ -753,7 +924,7 @@ function Inspector({ host }: { host: HTMLElement }) {
       document.removeEventListener("click", choose, true);
       document.removeEventListener("keydown", cancel, true);
     };
-  }, [host, picking, selectElement, themeTokens]);
+  }, [host, picking, selectElement, selectTab, themeTokens]);
 
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
@@ -1022,7 +1193,7 @@ function Inspector({ host }: { host: HTMLElement }) {
     else return;
 
     event.preventDefault();
-    setTab(TABS[next]);
+    selectTab(TABS[next]);
     tabRefs.current[next]?.focus();
   }
 
@@ -1066,9 +1237,13 @@ function Inspector({ host }: { host: HTMLElement }) {
     return { error: false, message };
   }
 
+  /** The X button: hides the window AND ends reload persistence. */
   function hideInspector() {
     setPicking(false);
     highlightElement(null);
+    setForcedStates(noStatesForced());
+    clearStateStyles();
+    trackInspector(false);
     host.style.display = "none";
   }
 
@@ -1107,7 +1282,7 @@ function Inspector({ host }: { host: HTMLElement }) {
               aria-controls={`inspector-panel-${name}`}
               tabIndex={tab === name ? 0 : -1}
               $selected={tab === name}
-              onClick={() => setTab(name)}
+              onClick={() => selectTab(name)}
             >
               {name}
             </Tab>
@@ -1173,6 +1348,12 @@ function Inspector({ host }: { host: HTMLElement }) {
             onHoverElement={hoverHighlight}
             onApplyStyle={applyStyle}
             onRemoveStyle={removeStyle}
+            forcedStates={forcedStates}
+            onToggleForcedState={toggleForcedState}
+            stateStyles={selectedStateStyles}
+            onAddStateStyle={addStateStyle}
+            onRemoveStateStyle={removeStateStyle}
+            onOpenSource={openSource}
           />
         )}
         {tab === "Console" && (
@@ -1187,7 +1368,7 @@ function Inspector({ host }: { host: HTMLElement }) {
             onClear={() => setEntries([])}
           />
         )}
-        {tab === "Sources" && <SourcesPanel />}
+        {tab === "Sources" && <SourcesPanel reveal={sourceReveal} />}
         {tab === "Network" && <NetworkPanel />}
         {tab === "Cookies" && (
           <CookiesPanel

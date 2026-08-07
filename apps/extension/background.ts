@@ -2,10 +2,12 @@ import {
   CLEAR_SITE_COOKIES_MESSAGE,
   DELETE_COOKIE_MESSAGE,
   EVALUATE_MESSAGE,
+  FETCH_SOURCE_MESSAGE,
   GET_COOKIES_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
   REQUEST_COOKIE_ACCESS_MESSAGE,
   SET_COOKIE_MESSAGE,
+  TRACK_INSPECTOR_MESSAGE,
   isConsoleEventName,
   type ClearSiteCookiesRequest,
   type ClearSiteCookiesResponse,
@@ -16,6 +18,8 @@ import {
   type DeleteCookieResponse,
   type EvaluateRequest,
   type EvaluateResponse,
+  type FetchSourceRequest,
+  type FetchSourceResponse,
   type GetCookiesResponse,
   type GetCookiesRequest,
   type InterceptConsoleRequest,
@@ -24,12 +28,111 @@ import {
   type RequestCookieAccessResponse,
   type SetCookieRequest,
   type SetCookieResponse,
+  type TrackInspectorRequest,
+  type TrackInspectorResponse,
 } from "~lib/messages";
+import { readBodyCapped } from "~lib/source-fetch";
+import inspectorBundleUrl from "url:./injected/inspector-entry.tsx";
+import consolePrehookUrl from "url:./injected/console-prehook.ts";
 
 const PREVIEW_LIMIT = 2000;
+/** Matches the Sources panel's own per-file display cap. */
+const SOURCE_FETCH_LIMIT = 60000;
 
 /** The optional grant that unlocks reading every profile cookie. */
 const ALL_HOSTS = ["http://*/*", "https://*/*"];
+
+/** chrome.scripting takes extension-relative paths, not full chrome:// URLs. */
+function toExtensionPath(bundleUrl: string): string {
+  const resolved = new URL(bundleUrl, chrome.runtime.getURL("/"));
+  return resolved.pathname.replace(/^\//, "");
+}
+
+const INSPECTOR_BUNDLE = toExtensionPath(inspectorBundleUrl);
+const CONSOLE_PREHOOK = toExtensionPath(consolePrehookUrl);
+
+/** storage.session key for a tab whose inspector is open; value = origin. */
+const openTabKey = (tabId: number) => `openTab:${tabId}`;
+/** storage.session key for an origin's last active panel tab. */
+const panelKey = (origin: string) => `panel:${origin}`;
+const prehookScriptId = (origin: string) => `inspector-lab-prehook:${origin}`;
+
+/**
+ * Registers the console prehook as a document_start MAIN-world content script
+ * for `origin`, so after a reload console capture starts before any page
+ * script runs. Needs the per-origin host grant (the same one the popup
+ * requests for cookies); without it the registration is skipped and capture
+ * starts at relaunch instead — the pre-persistence behavior.
+ */
+async function ensurePrehookRegistered(origin: string): Promise<void> {
+  const granted = await chrome.permissions.contains({
+    origins: [`${origin}/*`],
+  });
+  if (!granted) return;
+
+  const id = prehookScriptId(origin);
+  const existing = await chrome.scripting.getRegisteredContentScripts({
+    ids: [id],
+  });
+  if (existing.length > 0) return;
+
+  await chrome.scripting.registerContentScripts([
+    {
+      id,
+      js: [CONSOLE_PREHOOK],
+      matches: [`${origin}/*`],
+      runAt: "document_start",
+      world: "MAIN",
+      persistAcrossSessions: false,
+    },
+  ]);
+}
+
+/** Drops an origin's prehook registration once no open tab needs it. */
+async function unregisterPrehookIfUnused(origin: string): Promise<void> {
+  const all = await chrome.storage.session.get(null);
+  const stillUsed = Object.entries(all).some(
+    ([key, value]) => key.startsWith("openTab:") && value === origin,
+  );
+  if (stillUsed) return;
+  await chrome.scripting
+    .unregisterContentScripts({ ids: [prehookScriptId(origin)] })
+    .catch(() => undefined); // never registered (no host grant) — fine
+}
+
+/**
+ * Reload persistence: a tab whose inspector is open (not closed with X) gets
+ * the bundle re-injected when the tab finishes loading again. Works under the
+ * per-site host grant, or activeTab for same-origin reloads; when both are
+ * unavailable executeScript rejects and the inspector simply stays closed.
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "complete") return;
+  void (async () => {
+    const key = openTabKey(tabId);
+    const stored = await chrome.storage.session.get(key);
+    if (!stored[key]) return;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: [INSPECTOR_BUNDLE],
+      });
+    } catch {
+      /* Grant expired (cross-origin navigation without a host grant). */
+    }
+  })();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void (async () => {
+    const key = openTabKey(tabId);
+    const stored = await chrome.storage.session.get(key);
+    const origin = stored[key] as string | undefined;
+    if (origin === undefined) return;
+    await chrome.storage.session.remove(key);
+    await unregisterPrehookIfUnused(origin).catch(() => undefined);
+  })();
+});
 
 /**
  * Runs inside the page's MAIN world via chrome.scripting, so it must be fully
@@ -123,163 +226,23 @@ function evaluateInPage(expression: string, limit: number): EvaluateResponse {
 }
 
 /**
- * Runs in the page's MAIN world. Wraps the console methods so every call is
- * re-broadcast as a CustomEvent whose detail is a JSON string (plain strings
- * cross the MAIN/ISOLATED world boundary reliably), which the injected
- * inspector listens for under a random per-launch event name. Idempotent:
- * re-injection only rotates the event name, it never double-wraps.
- *
- * Like `evaluateInPage`, it must be fully self-contained — no imports, no
- * closure over module scope — which is why the serializer is duplicated.
+ * Runs in the page's MAIN world. Points the already-installed console hook
+ * (injected/console-prehook.ts — via the document_start registration or the
+ * files-injection just before this call) at a fresh event channel, then
+ * replays anything buffered before the inspector connected. Self-contained:
+ * no imports, no closure over module scope.
  */
-function installConsoleInterceptor(eventName: string, limit: number): boolean {
-  type HookState = { eventName: string };
+function connectConsoleHook(eventName: string): boolean {
+  type HookState = { eventName: string | null; buffer: string[] };
   const holder = window as Window & { __inspectorLabConsoleHook?: HookState };
+  const state = holder.__inspectorLabConsoleHook;
+  if (!state) return false;
 
-  const installed = holder.__inspectorLabConsoleHook;
-  if (installed) {
-    installed.eventName = eventName;
-    return true;
+  state.eventName = eventName;
+  const pending = Array.isArray(state.buffer) ? state.buffer.splice(0) : [];
+  for (const detail of pending) {
+    document.dispatchEvent(new CustomEvent(eventName, { detail }));
   }
-
-  const state: HookState = { eventName };
-  holder.__inspectorLabConsoleHook = state;
-
-  const describe = (value: unknown, depth: number): string => {
-    if (value === null) return "null";
-    if (value === undefined) return "undefined";
-
-    const type = typeof value;
-    // Top-level strings print bare, the way the real console renders them.
-    if (type === "string") {
-      return depth === 0 ? (value as string) : JSON.stringify(value);
-    }
-    if (
-      type === "number" ||
-      type === "boolean" ||
-      type === "bigint" ||
-      type === "symbol"
-    ) {
-      return String(value);
-    }
-    if (type === "function") {
-      const name = (value as { name?: string }).name;
-      return `ƒ ${name || "anonymous"}()`;
-    }
-    if (value instanceof Error) {
-      return `${value.name}: ${value.message}`;
-    }
-    if (value instanceof Element) {
-      const id = value.id ? `#${value.id}` : "";
-      const cls =
-        typeof value.className === "string" && value.className
-          ? `.${value.className.trim().split(/\s+/).join(".")}`
-          : "";
-      return `<${value.tagName.toLowerCase()}${id}${cls}>`;
-    }
-    // Never enumerate window — hundreds of properties, some cross-origin.
-    if (value === window) return "Window";
-    if (typeof (value as { then?: unknown }).then === "function") {
-      return "Promise";
-    }
-
-    if (Array.isArray(value)) {
-      if (depth >= 2) return `Array(${value.length})`;
-      const items = value
-        .slice(0, 10)
-        .map((item) => describe(item, depth + 1))
-        .join(", ");
-      const more = value.length > 10 ? `, … ${value.length - 10} more` : "";
-      return `(${value.length}) [${items}${more}]`;
-    }
-    if (depth >= 2) return "{…}";
-
-    try {
-      const entries = Object.entries(value as Record<string, unknown>)
-        .slice(0, 10)
-        .map(([key, item]) => `${key}: ${describe(item, depth + 1)}`);
-      const ctor = (value as object).constructor?.name;
-      const tag = ctor && ctor !== "Object" ? `${ctor} ` : "";
-      return `${tag}{${entries.join(", ")}}`;
-    } catch {
-      return Object.prototype.toString.call(value);
-    }
-  };
-
-  /** `String(value)` that can never throw (revoked proxies, hostile toString). */
-  const toStringSafe = (value: unknown): string => {
-    try {
-      return String(value);
-    } catch {
-      return Object.prototype.toString.call(value);
-    }
-  };
-
-  /**
-   * Chrome's format specifiers: they apply only when the first argument is a
-   * string, each specifier consumes one following argument, unmatched
-   * specifiers stay literal, `%%` escapes, and leftover arguments are
-   * appended space-separated. `%c` consumes its CSS argument but styles
-   * cannot be rendered in a text-only feed, so it contributes nothing.
-   */
-  const format = (args: unknown[]): string => {
-    const first = args[0];
-    if (typeof first !== "string" || !/%[sdifoOc%]/.test(first)) {
-      return args.map((argument) => describe(argument, 0)).join(" ");
-    }
-
-    const rest = args.slice(1);
-    let cursor = 0;
-
-    const formatted = first.replace(/%[sdifoOc%]/g, (specifier) => {
-      if (specifier === "%%") return "%";
-      if (cursor >= rest.length) return specifier;
-      const value = rest[cursor++];
-
-      if (specifier === "%s") {
-        return typeof value === "string" ? value : toStringSafe(value);
-      }
-      if (specifier === "%d" || specifier === "%i") {
-        const parsed = Number(value);
-        return Number.isNaN(parsed) ? "NaN" : String(Math.trunc(parsed));
-      }
-      if (specifier === "%f") {
-        return String(Number(value));
-      }
-      if (specifier === "%c") return "";
-      // %o / %O: object formatting; depth 1 keeps nested strings quoted.
-      return describe(value, 1);
-    });
-
-    const leftover = rest
-      .slice(cursor)
-      .map((argument) => describe(argument, 0));
-    return [formatted, ...leftover].join(" ");
-  };
-
-  const forward = (level: string, args: unknown[]) => {
-    // A console patch must never be able to break the page.
-    try {
-      let text = format(args);
-      if (text.length > limit) text = `${text.slice(0, limit)}…`;
-      document.dispatchEvent(
-        new CustomEvent(state.eventName, {
-          detail: JSON.stringify({ level, text }),
-        }),
-      );
-    } catch {
-      /* Serialization is best-effort; the original call already ran. */
-    }
-  };
-
-  (["log", "info", "warn", "error", "debug"] as const).forEach((method) => {
-    const original = console[method].bind(console);
-    console[method] = (...args: unknown[]) => {
-      original(...args);
-      forward(method, args);
-    };
-  });
-
   return true;
 }
 
@@ -415,6 +378,8 @@ chrome.runtime.onMessage.addListener(
       | DeleteCookieRequest
       | SetCookieRequest
       | ClearSiteCookiesRequest
+      | TrackInspectorRequest
+      | FetchSourceRequest
       | RequestCookieAccessRequest;
     if (
       request?.type !== EVALUATE_MESSAGE &&
@@ -423,6 +388,8 @@ chrome.runtime.onMessage.addListener(
       request?.type !== DELETE_COOKIE_MESSAGE &&
       request?.type !== SET_COOKIE_MESSAGE &&
       request?.type !== CLEAR_SITE_COOKIES_MESSAGE &&
+      request?.type !== TRACK_INSPECTOR_MESSAGE &&
+      request?.type !== FETCH_SOURCE_MESSAGE &&
       request?.type !== REQUEST_COOKIE_ACCESS_MESSAGE
     ) {
       return;
@@ -449,6 +416,8 @@ chrome.runtime.onMessage.addListener(
           | DeleteCookieResponse
           | SetCookieResponse
           | ClearSiteCookiesResponse
+          | TrackInspectorResponse
+          | FetchSourceResponse
           | RequestCookieAccessResponse);
       }
       return;
@@ -811,6 +780,56 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (request.type === FETCH_SOURCE_MESSAGE) {
+      if (
+        typeof request.url !== "string" ||
+        !/^https?:\/\//.test(request.url)
+      ) {
+        sendResponse({
+          ok: false,
+          error: "Only http(s) resources can be fetched.",
+        } satisfies FetchSourceResponse);
+        return;
+      }
+
+      const url = request.url;
+      void (async () => {
+        try {
+          // Prefer the HTTP cache (the page already loaded this resource)
+          // and never attach credentials: source viewing needs no cookies.
+          const response = await fetch(url, {
+            cache: "force-cache",
+            credentials: "omit",
+          });
+          if (!response.ok) {
+            sendResponse({
+              ok: false,
+              error: `The server responded with ${response.status}.`,
+            } satisfies FetchSourceResponse);
+            return;
+          }
+          const { text, truncated } = await readBodyCapped(
+            response,
+            SOURCE_FETCH_LIMIT,
+          );
+          sendResponse({
+            ok: true,
+            content: text,
+            truncated,
+          } satisfies FetchSourceResponse);
+        } catch {
+          sendResponse({
+            ok: false,
+            error:
+              "The file could not be fetched — its host blocks cross-origin reads and no host permission covers it.",
+          } satisfies FetchSourceResponse);
+        }
+      })();
+
+      // Keep the message channel open for the async response.
+      return true;
+    }
+
     if (request.type === INTERCEPT_CONSOLE_MESSAGE) {
       if (
         typeof request.eventName !== "string" ||
@@ -820,20 +839,79 @@ chrome.runtime.onMessage.addListener(
         return;
       }
 
-      chrome.scripting
-        .executeScript({
-          target: { tabId },
-          world: "MAIN",
-          injectImmediately: true,
-          func: installConsoleInterceptor,
-          args: [request.eventName, PREVIEW_LIMIT],
-        })
-        .then(() => {
-          sendResponse({ ok: true } satisfies InterceptConsoleResponse);
-        })
-        .catch(() => {
+      const eventName = request.eventName;
+      void (async () => {
+        try {
+          // Idempotent: installs the wrapper unless the document_start
+          // registration (or an earlier launch) already has.
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            injectImmediately: true,
+            files: [CONSOLE_PREHOOK],
+          });
+          const [injection] = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            injectImmediately: true,
+            func: connectConsoleHook,
+            args: [eventName],
+          });
+          sendResponse({
+            ok: injection?.result === true,
+          } satisfies InterceptConsoleResponse);
+        } catch {
           sendResponse({ ok: false } satisfies InterceptConsoleResponse);
-        });
+        }
+      })();
+
+      // Keep the message channel open for the async response.
+      return true;
+    }
+
+    if (request.type === TRACK_INSPECTOR_MESSAGE) {
+      const tabUrl = sender.tab?.url;
+      void (async () => {
+        try {
+          if (request.open === true) {
+            if (!tabUrl || !/^https?:/.test(tabUrl)) {
+              sendResponse({ ok: false } satisfies TrackInspectorResponse);
+              return;
+            }
+            const origin = new URL(tabUrl).origin;
+            await chrome.storage.session.set({ [openTabKey(tabId)]: origin });
+            await ensurePrehookRegistered(origin).catch(() => undefined);
+
+            // Panel-tab memory, per origin: a panel switch stores the name;
+            // a plain open gets the remembered one echoed back.
+            if (
+              typeof request.activeTab === "string" &&
+              request.activeTab.length <= 32
+            ) {
+              await chrome.storage.session.set({
+                [panelKey(origin)]: request.activeTab,
+              });
+              sendResponse({ ok: true } satisfies TrackInspectorResponse);
+            } else {
+              const stored = await chrome.storage.session.get(panelKey(origin));
+              const activeTab = stored[panelKey(origin)];
+              sendResponse({
+                ok: true,
+                ...(typeof activeTab === "string" ? { activeTab } : {}),
+              } satisfies TrackInspectorResponse);
+            }
+          } else {
+            const key = openTabKey(tabId);
+            const stored = await chrome.storage.session.get(key);
+            const origin = stored[key] as string | undefined;
+            await chrome.storage.session.remove(key);
+            if (origin !== undefined) await unregisterPrehookIfUnused(origin);
+            sendResponse({ ok: true } satisfies TrackInspectorResponse);
+          }
+        } catch {
+          sendResponse({ ok: false } satisfies TrackInspectorResponse);
+        }
+      })();
 
       // Keep the message channel open for the async response.
       return true;

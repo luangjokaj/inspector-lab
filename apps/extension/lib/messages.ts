@@ -172,6 +172,49 @@ export type ClearSiteCookiesResponse = {
   error?: string;
 };
 
+export const TRACK_INSPECTOR_MESSAGE = "inspector-lab/track-inspector" as const;
+
+/**
+ * Marks the sender's tab as having the inspector open (or closed). Open tabs
+ * are re-injected after a reload, and their origin gets the document_start
+ * console prehook registered so capture starts before page scripts run.
+ *
+ * `activeTab` piggybacks the panel-tab memory: sent when the user switches
+ * panels, it is stored per-origin; an open request without it gets the
+ * origin's last panel echoed back so a reloaded inspector reopens there.
+ */
+export type TrackInspectorRequest = {
+  type: typeof TRACK_INSPECTOR_MESSAGE;
+  open: boolean;
+  activeTab?: string;
+};
+
+export type TrackInspectorResponse = {
+  ok: boolean;
+  /** The origin's remembered panel tab, echoed on open requests. */
+  activeTab?: string;
+};
+
+export const FETCH_SOURCE_MESSAGE = "inspector-lab/fetch-source" as const;
+
+/**
+ * Fetches an external source file's text for the Sources panel — only ever
+ * sent after the user clicks the file. The panel tries a page-context fetch
+ * first; this background fallback covers cross-origin resources that reject
+ * CORS but fall under a host grant.
+ */
+export type FetchSourceRequest = {
+  type: typeof FETCH_SOURCE_MESSAGE;
+  url: string;
+};
+
+export type FetchSourceResponse = {
+  ok: boolean;
+  content?: string;
+  truncated?: boolean;
+  error?: string;
+};
+
 const CONSOLE_EVENT_PREFIX = "inspector-lab-console:";
 
 /**
