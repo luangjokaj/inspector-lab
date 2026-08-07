@@ -6,7 +6,11 @@ import {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
-import styled, { StyleSheetManager, ThemeProvider } from "styled-components";
+import styled, {
+  StyleSheetManager,
+  ThemeProvider,
+  css,
+} from "styled-components";
 import { Icon, IconButton } from "cherry-styled-components";
 import { theme as lightTheme, themeDark } from "~lib/theme";
 import {
@@ -62,6 +66,16 @@ const VIEWPORT_GUTTER = 12;
 /** Oldest console entries are dropped past this point, as DevTools also caps. */
 const MAX_CONSOLE_ENTRIES = 1000;
 
+const MIN_DOCK_WIDTH = 320;
+const MIN_DOCK_HEIGHT = 160;
+/** Room always left for the page when the inspector is docked to an edge. */
+const DOCK_VIEWPORT_MARGIN = 48;
+
+/** Where the window sits: pinned to a viewport edge, or free-floating. */
+type DockSide = "floating" | "bottom" | "left" | "right";
+/** Compass edge/corner being dragged while resizing the floating window. */
+type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
 /** Tab order matches Chrome DevTools: Elements is always first. */
 const TABS = ["Elements", "Console", "Sources", "Network", "Cookies"] as const;
 type TabName = (typeof TABS)[number];
@@ -99,8 +113,130 @@ const ResizeHandle = styled.div`
   }
 `;
 
+/** Hit area for one edge or corner of the floating window. */
+const edgeStyle = (direction: ResizeDirection) => {
+  switch (direction) {
+    case "n":
+      return css`
+        top: 0;
+        right: 10px;
+        left: 10px;
+        height: 6px;
+        cursor: ns-resize;
+      `;
+    case "s":
+      return css`
+        right: 10px;
+        bottom: 0;
+        left: 10px;
+        height: 6px;
+        cursor: ns-resize;
+      `;
+    case "e":
+      return css`
+        top: 10px;
+        right: 0;
+        bottom: 10px;
+        width: 6px;
+        cursor: ew-resize;
+      `;
+    case "w":
+      return css`
+        top: 10px;
+        bottom: 10px;
+        left: 0;
+        width: 6px;
+        cursor: ew-resize;
+      `;
+    case "ne":
+      return css`
+        top: 0;
+        right: 0;
+        width: 12px;
+        height: 12px;
+        cursor: nesw-resize;
+      `;
+    case "nw":
+      return css`
+        top: 0;
+        left: 0;
+        width: 12px;
+        height: 12px;
+        cursor: nwse-resize;
+      `;
+    case "sw":
+      return css`
+        bottom: 0;
+        left: 0;
+        width: 12px;
+        height: 12px;
+        cursor: nesw-resize;
+      `;
+    case "se":
+      return css`
+        right: 0;
+        bottom: 0;
+        width: 16px;
+        height: 16px;
+        cursor: nwse-resize;
+      `;
+  }
+};
+
+/** Invisible strips along the floating window's edges and corners. */
+const FloatResizeHandle = styled.div<{ $direction: ResizeDirection }>`
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+  ${({ $direction }) => edgeStyle($direction)};
+`;
+
+/** The split-drag strip along a docked window's page-facing edge. */
+const DockResizer = styled.div<{ $side: "bottom" | "left" | "right" }>`
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+  ${({ $side }) =>
+    $side === "bottom"
+      ? css`
+          top: 0;
+          right: 0;
+          left: 0;
+          height: 5px;
+          cursor: ns-resize;
+        `
+      : $side === "right"
+        ? css`
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: 5px;
+            cursor: ew-resize;
+          `
+        : css`
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 5px;
+            cursor: ew-resize;
+          `};
+
+  &:focus-visible {
+    outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+    outline-offset: -1px;
+  }
+`;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+function maxDockHeight(): number {
+  return Math.max(MIN_DOCK_HEIGHT, window.innerHeight - DOCK_VIEWPORT_MARGIN);
+}
+
+function maxDockWidth(): number {
+  return Math.max(MIN_DOCK_WIDTH, window.innerWidth - DOCK_VIEWPORT_MARGIN);
 }
 
 /**
@@ -191,6 +327,18 @@ function initialFrame(): Frame {
 
 function Inspector({ host }: { host: HTMLElement }) {
   const [frame, setFrame] = useState<Frame>(initialFrame);
+  // Docked to the bottom by default, like DevTools' own default dock side.
+  const [dock, setDock] = useState<DockSide>("bottom");
+  const [dockHeight, setDockHeight] = useState(() =>
+    clamp(
+      Math.round(window.innerHeight * 0.4),
+      MIN_DOCK_HEIGHT,
+      maxDockHeight(),
+    ),
+  );
+  const [dockWidth, setDockWidth] = useState(() =>
+    clamp(Math.round(window.innerWidth * 0.35), MIN_DOCK_WIDTH, maxDockWidth()),
+  );
   const [dragging, setDragging] = useState(false);
   const [picking, setPicking] = useState(false);
   const [tab, setTab] = useState<TabName>("Elements");
@@ -272,11 +420,37 @@ function Inspector({ host }: { host: HTMLElement }) {
   }, [log]);
 
   useLayoutEffect(() => {
-    host.style.left = `${frame.left}px`;
-    host.style.top = `${frame.top}px`;
-    host.style.width = `${frame.width}px`;
-    host.style.height = `${frame.height}px`;
-  }, [frame, host]);
+    if (dock === "bottom") {
+      Object.assign(host.style, {
+        left: "0px",
+        right: "0px",
+        top: "auto",
+        bottom: "0px",
+        width: "100%",
+        height: `${dockHeight}px`,
+      });
+      return;
+    }
+    if (dock === "left" || dock === "right") {
+      Object.assign(host.style, {
+        top: "0px",
+        bottom: "0px",
+        height: "100%",
+        width: `${dockWidth}px`,
+        left: dock === "left" ? "0px" : "auto",
+        right: dock === "left" ? "auto" : "0px",
+      });
+      return;
+    }
+    Object.assign(host.style, {
+      left: `${frame.left}px`,
+      top: `${frame.top}px`,
+      right: "auto",
+      bottom: "auto",
+      width: `${frame.width}px`,
+      height: `${frame.height}px`,
+    });
+  }, [dock, dockHeight, dockWidth, frame, host]);
 
   useEffect(() => {
     const show = () => {
@@ -320,6 +494,10 @@ function Inspector({ host }: { host: HTMLElement }) {
           ),
         };
       });
+      setDockHeight((current) =>
+        clamp(current, MIN_DOCK_HEIGHT, maxDockHeight()),
+      );
+      setDockWidth((current) => clamp(current, MIN_DOCK_WIDTH, maxDockWidth()));
     };
 
     host.addEventListener(SHOW_EVENT, show);
@@ -401,7 +579,7 @@ function Inspector({ host }: { host: HTMLElement }) {
   }, [host, picking, selectElement]);
 
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || dock !== "floating") return;
     const target = event.target as Element;
     if (target.closest("button")) return;
 
@@ -434,26 +612,69 @@ function Inspector({ host }: { host: HTMLElement }) {
     window.addEventListener("pointerup", end, { once: true });
   }
 
-  function beginResize(event: React.PointerEvent<HTMLElement>) {
+  /**
+   * Resizing from any edge or corner: east/south move the far edge, while
+   * west/north move the origin and keep the opposite edge pinned in place.
+   */
+  function beginEdgeResize(
+    direction: ResizeDirection,
+    event: React.PointerEvent<HTMLElement>,
+  ) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     const start = { x: event.clientX, y: event.clientY, frame };
+    const minWidth = Math.min(
+      MIN_WIDTH,
+      window.innerWidth - VIEWPORT_GUTTER * 2,
+    );
+    const minHeight = Math.min(
+      MIN_HEIGHT,
+      window.innerHeight - VIEWPORT_GUTTER * 2,
+    );
 
     const move = (moveEvent: PointerEvent) => {
-      setFrame((current) => ({
-        ...current,
-        width: clamp(
-          start.frame.width + moveEvent.clientX - start.x,
-          Math.min(MIN_WIDTH, window.innerWidth - VIEWPORT_GUTTER * 2),
-          window.innerWidth - current.left - VIEWPORT_GUTTER,
-        ),
-        height: clamp(
-          start.frame.height + moveEvent.clientY - start.y,
-          Math.min(MIN_HEIGHT, window.innerHeight - VIEWPORT_GUTTER * 2),
-          window.innerHeight - current.top - VIEWPORT_GUTTER,
-        ),
-      }));
+      const dx = moveEvent.clientX - start.x;
+      const dy = moveEvent.clientY - start.y;
+
+      setFrame(() => {
+        let { left, top, width, height } = start.frame;
+        const right = start.frame.left + start.frame.width;
+        const bottom = start.frame.top + start.frame.height;
+
+        if (direction.includes("e")) {
+          width = clamp(
+            start.frame.width + dx,
+            minWidth,
+            window.innerWidth - left - VIEWPORT_GUTTER,
+          );
+        }
+        if (direction.includes("s")) {
+          height = clamp(
+            start.frame.height + dy,
+            minHeight,
+            window.innerHeight - top - VIEWPORT_GUTTER,
+          );
+        }
+        if (direction.includes("w")) {
+          left = clamp(
+            start.frame.left + dx,
+            VIEWPORT_GUTTER,
+            right - minWidth,
+          );
+          width = right - left;
+        }
+        if (direction.includes("n")) {
+          top = clamp(
+            start.frame.top + dy,
+            VIEWPORT_GUTTER,
+            bottom - minHeight,
+          );
+          height = bottom - top;
+        }
+
+        return { left, top, width, height };
+      });
     };
     const end = () => {
       window.removeEventListener("pointermove", move);
@@ -462,6 +683,92 @@ function Inspector({ host }: { host: HTMLElement }) {
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end, { once: true });
+  }
+
+  /** Drags the page-facing edge of a docked window to change the split. */
+  function beginDockResize(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || dock === "floating") return;
+    event.preventDefault();
+    const side = dock;
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      width: dockWidth,
+      height: dockHeight,
+    };
+
+    const move = (moveEvent: PointerEvent) => {
+      if (side === "bottom") {
+        setDockHeight(
+          clamp(
+            start.height + (start.y - moveEvent.clientY),
+            MIN_DOCK_HEIGHT,
+            maxDockHeight(),
+          ),
+        );
+      } else if (side === "right") {
+        setDockWidth(
+          clamp(
+            start.width + (start.x - moveEvent.clientX),
+            MIN_DOCK_WIDTH,
+            maxDockWidth(),
+          ),
+        );
+      } else {
+        setDockWidth(
+          clamp(
+            start.width + (moveEvent.clientX - start.x),
+            MIN_DOCK_WIDTH,
+            maxDockWidth(),
+          ),
+        );
+      }
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end, { once: true });
+  }
+
+  function dockResizeWithKeyboard(event: React.KeyboardEvent<HTMLElement>) {
+    if (dock === "floating") return;
+    const amount = event.shiftKey ? 40 : 10;
+    let handled = true;
+
+    if (dock === "bottom") {
+      if (event.key === "ArrowUp") {
+        setDockHeight((current) =>
+          clamp(current + amount, MIN_DOCK_HEIGHT, maxDockHeight()),
+        );
+      } else if (event.key === "ArrowDown") {
+        setDockHeight((current) =>
+          clamp(current - amount, MIN_DOCK_HEIGHT, maxDockHeight()),
+        );
+      } else handled = false;
+    } else {
+      // Growing always means moving the drag edge toward the page.
+      const grow = dock === "right" ? "ArrowLeft" : "ArrowRight";
+      const shrink = dock === "right" ? "ArrowRight" : "ArrowLeft";
+      if (event.key === grow) {
+        setDockWidth((current) =>
+          clamp(current + amount, MIN_DOCK_WIDTH, maxDockWidth()),
+        );
+      } else if (event.key === shrink) {
+        setDockWidth((current) =>
+          clamp(current - amount, MIN_DOCK_WIDTH, maxDockWidth()),
+        );
+      } else handled = false;
+    }
+
+    if (handled) event.preventDefault();
+  }
+
+  /** Clicking the active dock button again releases the window to float. */
+  function toggleDock(side: Exclude<DockSide, "floating">) {
+    setDock((current) => (current === side ? "floating" : side));
   }
 
   function resizeWithKeyboard(event: React.KeyboardEvent<HTMLElement>) {
@@ -560,7 +867,11 @@ function Inspector({ host }: { host: HTMLElement }) {
 
   return (
     <InspectorWindow aria-label="Inspector Lab in-page inspector">
-      <WindowToolbar $dragging={dragging} onPointerDown={beginDrag}>
+      <WindowToolbar
+        $dragging={dragging}
+        $draggable={dock === "floating"}
+        onPointerDown={beginDrag}
+      >
         <ToolbarControls>
           <IconButton
             aria-label={picking ? "Cancel element picker" : "Pick an element"}
@@ -603,6 +914,28 @@ function Inspector({ host }: { host: HTMLElement }) {
         <ToolbarSpacer />
 
         <ToolbarControls>
+          <IconButton
+            aria-label="Dock to bottom"
+            $active={dock === "bottom"}
+            onClick={() => toggleDock("bottom")}
+          >
+            <Icon name="PanelBottom" size={14} />
+          </IconButton>
+          <IconButton
+            aria-label="Dock to right"
+            $active={dock === "right"}
+            onClick={() => toggleDock("right")}
+          >
+            <Icon name="PanelRight" size={14} />
+          </IconButton>
+          <IconButton
+            aria-label="Dock to left"
+            $active={dock === "left"}
+            onClick={() => toggleDock("left")}
+          >
+            <Icon name="PanelLeft" size={14} />
+          </IconButton>
+          <ToolbarDivider />
           <IconButton aria-label="Close Inspector Lab" onClick={hideInspector}>
             <Icon name="X" size={14} />
           </IconButton>
@@ -644,14 +977,38 @@ function Inspector({ host }: { host: HTMLElement }) {
         )}
       </PanelHost>
 
-      <ResizeHandle
-        role="separator"
-        aria-label="Resize inspector"
-        aria-orientation="vertical"
-        tabIndex={0}
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
-      />
+      {dock === "floating" ? (
+        <>
+          {(["n", "s", "e", "w", "ne", "nw", "sw"] as const).map(
+            (direction) => (
+              <FloatResizeHandle
+                key={direction}
+                $direction={direction}
+                aria-hidden="true"
+                onPointerDown={(event) => beginEdgeResize(direction, event)}
+              />
+            ),
+          )}
+          <ResizeHandle
+            role="separator"
+            aria-label="Resize inspector"
+            aria-orientation="vertical"
+            tabIndex={0}
+            onPointerDown={(event) => beginEdgeResize("se", event)}
+            onKeyDown={resizeWithKeyboard}
+          />
+        </>
+      ) : (
+        <DockResizer
+          $side={dock}
+          role="separator"
+          aria-label="Resize inspector"
+          aria-orientation={dock === "bottom" ? "horizontal" : "vertical"}
+          tabIndex={0}
+          onPointerDown={beginDockResize}
+          onKeyDown={dockResizeWithKeyboard}
+        />
+      )}
     </InspectorWindow>
   );
 }
