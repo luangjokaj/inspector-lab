@@ -9,6 +9,8 @@
 export const HOST_ID = "inspector-lab-extension-root";
 export const HIGHLIGHT_ID = "inspector-lab-element-highlight";
 export const HOVER_HIGHLIGHT_ID = "inspector-lab-hover-highlight";
+/** The fallback `<style>` tag of the forced-state engine (state-styles.ts). */
+export const STATE_STYLE_ID = "inspector-lab-state-styles";
 export const SHOW_EVENT = "inspector-lab:show";
 
 export type AttributeEntry = { name: string; value: string };
@@ -18,6 +20,11 @@ export type MatchedRule = {
   selector: string;
   /** Where the rule came from: the stylesheet file name, or `<style>`. */
   source: string;
+  /** Absolute URL of the owning sheet; null for inline `<style>` blocks. */
+  sourceHref: string | null;
+  /** Position among the page's `<style>` tags, for inline sheets only —
+   *  matches the Sources panel's `style-N` file ids. */
+  inlineIndex: number | null;
   declarations: AttributeEntry[];
 };
 
@@ -66,7 +73,8 @@ export function isInspectorNode(node: Element): boolean {
   return (
     node.id === HOST_ID ||
     node.id === HIGHLIGHT_ID ||
-    node.id === HOVER_HIGHLIGHT_ID
+    node.id === HOVER_HIGHLIGHT_ID ||
+    node.id === STATE_STYLE_ID
   );
 }
 
@@ -222,7 +230,12 @@ export function matchedCssRules(element: Element): {
   const rules: MatchedRule[] = [];
   let inaccessible = 0;
 
-  const visit = (list: CSSRuleList, source: string) => {
+  const visit = (
+    list: CSSRuleList,
+    source: string,
+    sourceHref: string | null,
+    inlineIndex: number | null,
+  ) => {
     for (const rule of Array.from(list)) {
       if (rule instanceof CSSStyleRule) {
         let matches = false;
@@ -235,6 +248,8 @@ export function matchedCssRules(element: Element): {
           rules.push({
             selector: rule.selectorText,
             source,
+            sourceHref,
+            inlineIndex,
             declarations: Array.from(rule.style).map((name) => ({
               name,
               value: rule.style.getPropertyValue(name),
@@ -245,20 +260,34 @@ export function matchedCssRules(element: Element): {
       }
       if (rule instanceof CSSMediaRule) {
         if (window.matchMedia(rule.conditionText).matches) {
-          visit(rule.cssRules, source);
+          visit(rule.cssRules, source, sourceHref, inlineIndex);
         }
         continue;
       }
       if (rule instanceof CSSSupportsRule) {
-        if (CSS.supports(rule.conditionText)) visit(rule.cssRules, source);
+        if (CSS.supports(rule.conditionText)) {
+          visit(rule.cssRules, source, sourceHref, inlineIndex);
+        }
         continue;
       }
       // Other grouping rules (@layer blocks, etc.) always apply.
-      if (rule instanceof CSSGroupingRule) visit(rule.cssRules, source);
+      if (rule instanceof CSSGroupingRule) {
+        visit(rule.cssRules, source, sourceHref, inlineIndex);
+      }
     }
   };
 
+  // Tracks the sheet's position among `<style>` tags so a rule can link to
+  // the Sources panel's matching inline-stylesheet entry. Counted before the
+  // disabled check to stay aligned with the Sources panel's DOM-order list.
+  let styleTagIndex = -1;
   for (const sheet of Array.from(document.styleSheets)) {
+    const owner = sheet.ownerNode;
+    const isStyleTag = owner instanceof HTMLStyleElement;
+    if (isStyleTag) {
+      if (owner.id === STATE_STYLE_ID) continue; // the inspector's own sheet
+      styleTagIndex += 1;
+    }
     if (sheet.disabled) continue;
     let cssRules: CSSRuleList;
     try {
@@ -267,7 +296,12 @@ export function matchedCssRules(element: Element): {
       inaccessible += 1;
       continue;
     }
-    visit(cssRules, sheetLabel(sheet));
+    visit(
+      cssRules,
+      sheetLabel(sheet),
+      sheet.href,
+      isStyleTag ? styleTagIndex : null,
+    );
   }
 
   return { rules: rules.reverse(), inaccessible };

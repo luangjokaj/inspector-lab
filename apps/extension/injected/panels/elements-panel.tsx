@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import styled, { css } from "styled-components";
-import { Button, Icon, IconButton, Input } from "cherry-styled-components";
+import {
+  Button,
+  Icon,
+  IconButton,
+  Input,
+  Select,
+  resetButton,
+} from "cherry-styled-components";
 import {
   DevtoolsButtonGroup,
   DevtoolsField,
@@ -26,7 +33,14 @@ import {
   truncate,
   visibleChildren,
   type ElementSnapshot,
+  type MatchedRule,
 } from "~injected/inspector-dom";
+import {
+  PSEUDO_STATES,
+  type ForcedStateMap,
+  type PseudoState,
+  type StateStyleMap,
+} from "~injected/state-styles";
 
 /** DOM search stops collecting past this point to keep huge pages snappy. */
 const MAX_SEARCH_MATCHES = 500;
@@ -265,7 +279,9 @@ const RuleHeader = styled.div`
   gap: 4px;
 `;
 
-const RuleSource = styled.span`
+/** The stylesheet name doubles as a link into the Sources panel. */
+const RuleSource = styled.button`
+  ${resetButton};
   flex: 0 1 auto;
   max-width: 45%;
   margin-left: auto;
@@ -274,6 +290,74 @@ const RuleSource = styled.span`
   font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  &:hover {
+    color: ${({ theme }) => theme.devtools.accent};
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+    outline-offset: -1px;
+  }
+`;
+
+/* --------------------------------------------------------- forced states */
+
+/** DevTools' :hov panel: a compact checkbox grid above the rule blocks. */
+const StateSection = styled.div`
+  padding: 4px 6px;
+  border-bottom: solid 1px ${({ theme }) => theme.devtools.border};
+`;
+
+const StateSectionTitle = styled.div`
+  margin-bottom: 2px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+`;
+
+const StateGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 8px;
+`;
+
+/**
+ * One :state checkbox row. Compacts the Cherry checkbox to DevTools scale
+ * from the parent, the same way ToolbarControls restyles Cherry buttons.
+ */
+const StateCheck = styled.label`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 16px;
+  color: ${({ theme }) => theme.devtools.text};
+  font-family: ${({ theme }) => theme.devtools.monoFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  cursor: default;
+
+  /* Cherry wraps controls in spans; flatten them onto this one line. */
+  span {
+    display: inline-flex;
+    margin: 0;
+  }
+
+  input {
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+    margin: 0;
+    accent-color: ${({ theme }) => theme.devtools.accent};
+  }
+
+  /* Cherry's check mark, shrunk to sit inside the 12px circle. */
+  svg {
+    width: 8px;
+    height: 8px;
+    stroke-width: 4px;
+  }
 `;
 
 const PaneNote = styled.div`
@@ -663,6 +747,19 @@ export type ElementsPanelProps = {
   ) => { error: boolean; message: string };
   /** Removes one declaration from the element's inline `style`. */
   onRemoveStyle: (property: string) => { error: boolean; message: string };
+  /** Which pseudo-classes are currently forced on the selected element. */
+  forcedStates: ForcedStateMap;
+  onToggleForcedState: (state: PseudoState, forced: boolean) => void;
+  /** User-authored per-state declarations for the selected element. */
+  stateStyles: StateStyleMap;
+  onAddStateStyle: (
+    state: PseudoState,
+    property: string,
+    value: string,
+  ) => { error: boolean; message: string };
+  onRemoveStateStyle: (state: PseudoState, property: string) => void;
+  /** Jumps to the rule's stylesheet in the Sources panel. */
+  onOpenSource: (rule: MatchedRule) => void;
 };
 
 export function ElementsPanel({
@@ -673,6 +770,12 @@ export function ElementsPanel({
   onHoverElement,
   onApplyStyle,
   onRemoveStyle,
+  forcedStates,
+  onToggleForcedState,
+  stateStyles,
+  onAddStateStyle,
+  onRemoveStateStyle,
+  onOpenSource,
 }: ElementsPanelProps) {
   const [expanded, setExpanded] = useState<Set<Element>>(() => {
     const initial = new Set<Element>([document.documentElement]);
@@ -685,6 +788,9 @@ export function ElementsPanel({
   const [searchIndex, setSearchIndex] = useState(0);
   const [property, setProperty] = useState("color");
   const [value, setValue] = useState("");
+  const [stateTarget, setStateTarget] = useState<PseudoState>("hover");
+  const [stateProperty, setStateProperty] = useState("");
+  const [stateValue, setStateValue] = useState("");
   const [feedback, setFeedback] = useState<{
     message: string;
     error: boolean;
@@ -710,9 +816,16 @@ export function ElementsPanel({
     });
   }, [selectedElement]);
 
+  /*
+   * `expanded` must be a dependency: revealing a picked element first expands
+   * its ancestors in a separate commit, and only that re-render creates the
+   * row (and ref) this scroll needs. Keyed on selection alone, the effect
+   * fired before the row existed and picked elements never scrolled into
+   * view.
+   */
   useEffect(() => {
     selectedRowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedElement]);
+  }, [selectedElement, expanded]);
 
   /* Never leave a page highlight behind when the panel goes away. */
   useEffect(() => () => onHoverElement(null), [onHoverElement]);
@@ -782,6 +895,16 @@ export function ElementsPanel({
   const applyStyle = (event: React.FormEvent) => {
     event.preventDefault();
     setFeedback(onApplyStyle(property, value));
+  };
+
+  const applyStateStyle = (event: React.FormEvent) => {
+    event.preventDefault();
+    const result = onAddStateStyle(stateTarget, stateProperty, stateValue);
+    setFeedback(result);
+    if (!result.error) {
+      setStateProperty("");
+      setStateValue("");
+    }
   };
 
   const searchMatches = useMemo(() => {
@@ -1093,6 +1216,110 @@ export function ElementsPanel({
                 </Feedback>
               )}
 
+              <StateSection>
+                <StateSectionTitle>Force element state</StateSectionTitle>
+                <StateGrid>
+                  {PSEUDO_STATES.map((state) => (
+                    <StateCheck key={state}>
+                      <Input
+                        type="checkbox"
+                        id={`inspector-force-${state}`}
+                        checked={forcedStates[state]}
+                        onChange={(event) =>
+                          onToggleForcedState(state, event.target.checked)
+                        }
+                        aria-label={`Force :${state}`}
+                      />
+                      :{state}
+                    </StateCheck>
+                  ))}
+                </StateGrid>
+              </StateSection>
+
+              {PSEUDO_STATES.filter(
+                (state) => stateStyles[state].length > 0,
+              ).map((state) => (
+                <CssBlock key={`state-${state}`}>
+                  <RuleHeader>
+                    <span>
+                      <CssSelector>
+                        {snapshot.selector}:{state}
+                      </CssSelector>{" "}
+                      <Punct>{"{"}</Punct>
+                    </span>
+                  </RuleHeader>
+                  {stateStyles[state].map((entry) => (
+                    <CssDeclaration key={entry.name}>
+                      <DeclarationText>
+                        <CssProperty>{entry.name}</CssProperty>
+                        <Punct>: </Punct>
+                        <CssValue>{entry.value}</CssValue>
+                        <Punct>;</Punct>
+                      </DeclarationText>
+                      <DeclarationActions>
+                        <IconButton
+                          aria-label={`Delete ${entry.name} from :${state}`}
+                          onClick={() => onRemoveStateStyle(state, entry.name)}
+                        >
+                          <Icon name="X" size={11} />
+                        </IconButton>
+                      </DeclarationActions>
+                    </CssDeclaration>
+                  ))}
+                  <Punct>{"}"}</Punct>
+                </CssBlock>
+              ))}
+
+              <CssBlock>
+                <DeclarationEditor onSubmit={applyStateStyle}>
+                  <DevtoolsField>
+                    <Select
+                      id="inspector-state-target"
+                      $size="small"
+                      aria-label="Pseudo state to style"
+                      value={stateTarget}
+                      onChange={(event) =>
+                        setStateTarget(event.target.value as PseudoState)
+                      }
+                    >
+                      {PSEUDO_STATES.map((state) => (
+                        <option key={state} value={state}>
+                          :{state}
+                        </option>
+                      ))}
+                    </Select>
+                  </DevtoolsField>
+                  <DevtoolsField $grow>
+                    <Input
+                      id="inspector-state-property"
+                      $size="small"
+                      $fullWidth
+                      aria-label="State CSS property"
+                      placeholder="property"
+                      value={stateProperty}
+                      onChange={(event) => setStateProperty(event.target.value)}
+                    />
+                  </DevtoolsField>
+                  <Punct>:</Punct>
+                  <DevtoolsField $grow>
+                    <Input
+                      id="inspector-state-value"
+                      $size="small"
+                      $fullWidth
+                      aria-label="State CSS value"
+                      placeholder="value"
+                      value={stateValue}
+                      onChange={(event) => setStateValue(event.target.value)}
+                    />
+                  </DevtoolsField>
+                  <DevtoolsButtonGroup>
+                    <Button $size="small" type="submit">
+                      Add
+                    </Button>
+                  </DevtoolsButtonGroup>
+                </DeclarationEditor>
+              </CssBlock>
+
               {snapshot.matchedRules.map((rule, index) => (
                 <CssBlock key={`${rule.selector}-${index}`}>
                   <RuleHeader>
@@ -1100,7 +1327,13 @@ export function ElementsPanel({
                       <CssSelector>{rule.selector}</CssSelector>{" "}
                       <Punct>{"{"}</Punct>
                     </span>
-                    <RuleSource title={rule.source}>{rule.source}</RuleSource>
+                    <RuleSource
+                      type="button"
+                      title={`${rule.source} — open in Sources`}
+                      onClick={() => onOpenSource(rule)}
+                    >
+                      {rule.source}
+                    </RuleSource>
                   </RuleHeader>
                   {rule.declarations.length === 0 ? (
                     <NoDeclarations>no declarations</NoDeclarations>
