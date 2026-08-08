@@ -43,6 +43,12 @@ import {
   type WebRequestEntry,
 } from "~lib/messages";
 import { readBodyCapped } from "~lib/source-fetch";
+import {
+  appendDiagnostic,
+  appendDiagnosticOnce,
+  installGlobalDiagnostics,
+} from "~lib/diagnostics";
+import { storageGet, storageSet } from "~lib/storage";
 import { evaluateInPage } from "~injected/page-eval";
 import inspectorBundleUrl from "url:./injected/inspector-entry.tsx";
 import consolePrehookUrl from "url:./injected/console-prehook.ts";
@@ -63,6 +69,10 @@ import networkPrehookUrl from "url:./injected/network-prehook.ts";
  * here, above its definition.
  */
 chrome.runtime.onMessage.addListener(handleMessage);
+
+/** Uncaught errors in this worker land in the persistent diagnostics log,
+ *  readable from the popup — the only console an iPad has. */
+installGlobalDiagnostics("background");
 
 const PREVIEW_LIMIT = 2000;
 /** Matches the Sources panel's own per-file display cap. */
@@ -234,16 +244,31 @@ function headerPairsFrom(
  * still skip every registration after it, so each one gets its own guard. Also
  * covers an extraInfoSpec the browser rejects.
  */
-function registerListener(register: () => void): void {
+function registerListener(
+  register: () => void,
+  unsupportedNote?: string,
+): void {
   try {
     register();
   } catch {
     /* Unsupported here. Each caller degrades on its own terms: the Network
        panel falls back to the page's fetch/XHR hook, and the tab listeners
        cost reload persistence, not the inspector itself. */
+    if (unsupportedNote) {
+      void appendDiagnosticOnce({
+        source: "background",
+        level: "info",
+        message: unsupportedNote,
+      }).catch(() => undefined);
+    }
   }
 }
 
+// webRequest was briefly an optional permission in the hope of shrinking
+// Orion's install-time compatibility warning; a real-device test showed the
+// warning is not driven by the manifest's required permissions, so it went
+// back to required — the simpler shape, with listeners registered
+// synchronously at worker start.
 if (chrome.webRequest) {
   registerListener(() => {
     chrome.webRequest.onSendHeaders.addListener(
@@ -286,7 +311,7 @@ if (chrome.webRequest) {
       { urls: ["<all_urls>"] },
       ["responseHeaders", "extraHeaders"],
     );
-  });
+  }, "This browser exposes chrome.webRequest without its completion events; the Network panel uses the in-page fetch/XHR capture only.");
 
   registerListener(() => {
     chrome.webRequest.onErrorOccurred.addListener(
@@ -300,6 +325,109 @@ if (chrome.webRequest) {
     );
   });
 }
+
+/**
+ * Session tombstones: every open inspector is recorded in storage.local,
+ * which survives what storage.session cannot — browser restarts and process
+ * kills. Clean closes (the X button, or the tab itself closing) remove the
+ * record; whatever is left over for a tab that no longer exists is a session
+ * that ended without one, and the sweep turns it into a diagnostics entry.
+ * That is the only crash signal an iPad leaves behind.
+ */
+const OPEN_SESSIONS_KEY = "inspectorOpenSessions";
+
+type OpenSessions = Record<string, { origin: string; startedAt: number }>;
+
+/**
+ * Serializes every read-modify-write of the record. The startup sweep and the
+ * first TRACK open run concurrently on a cold worker, and unserialized the
+ * sweep's write could drop the record the open just added — losing exactly
+ * the tombstone this exists to produce.
+ */
+let openSessionsQueue: Promise<unknown> = Promise.resolve();
+
+function withOpenSessions<T>(task: () => Promise<T>): Promise<T> {
+  const run = openSessionsQueue.then(task, task);
+  openSessionsQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function readOpenSessions(): Promise<OpenSessions> {
+  const stored = await storageGet(OPEN_SESSIONS_KEY);
+  const value = stored[OPEN_SESSIONS_KEY];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  const sessions: OpenSessions = {};
+  for (const [key, session] of Object.entries(value)) {
+    const candidate = session as Partial<OpenSessions[string]> | null;
+    if (
+      typeof candidate?.origin === "string" &&
+      typeof candidate.startedAt === "number"
+    ) {
+      sessions[key] = {
+        origin: candidate.origin,
+        startedAt: candidate.startedAt,
+      };
+    }
+  }
+  return sessions;
+}
+
+function recordSessionOpen(tabId: number, origin: string): Promise<void> {
+  return withOpenSessions(async () => {
+    const sessions = await readOpenSessions();
+    sessions[String(tabId)] = { origin, startedAt: Date.now() };
+    await storageSet({ [OPEN_SESSIONS_KEY]: sessions });
+  });
+}
+
+function recordSessionClosed(tabId: number): Promise<void> {
+  return withOpenSessions(async () => {
+    const sessions = await readOpenSessions();
+    if (!(String(tabId) in sessions)) return;
+    delete sessions[String(tabId)];
+    await storageSet({ [OPEN_SESSIONS_KEY]: sessions });
+  });
+}
+
+/**
+ * Flags leftover records whose tab id no longer exists. Tab ids are never
+ * reused within a browser session and change across restarts, so a record
+ * without a live tab is exactly a session that never closed cleanly. A quit
+ * with the inspector open lands here too — the entry wording owns that
+ * ambiguity, since the OS kill this exists to catch is indistinguishable
+ * from the outside.
+ */
+function sweepAbandonedSessions(): Promise<void> {
+  return withOpenSessions(async () => {
+    try {
+      const sessions = await readOpenSessions();
+      const keys = Object.keys(sessions);
+      if (keys.length === 0) return;
+
+      const tabs = await chrome.tabs.query({});
+      const liveTabIds = new Set(tabs.map((tab) => tab.id));
+      let changed = false;
+      for (const key of keys) {
+        if (liveTabIds.has(Number(key))) continue;
+        const { origin } = sessions[key];
+        delete sessions[key];
+        changed = true;
+        void appendDiagnostic({
+          source: "background",
+          level: "error",
+          message: `The inspector session on ${origin} ended without a clean close — browser exit, page crash, or a memory kill.`,
+        }).catch(() => undefined);
+      }
+      if (changed) await storageSet({ [OPEN_SESSIONS_KEY]: sessions });
+    } catch {
+      /* tabs.query unavailable: the sweep is an aid, not a requirement. */
+    }
+  });
+}
+
+void sweepAbandonedSessions();
 
 /** Drops an origin's prehook registration once no open tab needs it. */
 async function unregisterPrehookIfUnused(origin: string): Promise<void> {
@@ -342,6 +470,8 @@ registerListener(() => {
   chrome.tabs.onRemoved.addListener((tabId) => {
     openTabIds.delete(tabId);
     webRequestLog.delete(tabId);
+    // Closing the tab counts as a clean end, not a crash.
+    void recordSessionClosed(tabId).catch(() => undefined);
     void (async () => {
       const key = openTabKey(tabId);
       const stored = await sessionStore.get(key);
@@ -1097,6 +1227,7 @@ function handleMessage(
           const origin = new URL(tabUrl).origin;
           openTabIds.add(tabId);
           await sessionStore.set({ [openTabKey(tabId)]: origin });
+          await recordSessionOpen(tabId, origin).catch(() => undefined);
           await ensurePrehookRegistered(origin).catch(() => undefined);
 
           // Panel-tab memory, per origin: a panel switch stores the name;
@@ -1119,6 +1250,7 @@ function handleMessage(
           }
         } else {
           openTabIds.delete(tabId);
+          await recordSessionClosed(tabId).catch(() => undefined);
           const key = openTabKey(tabId);
           const stored = await sessionStore.get(key);
           const origin = stored[key] as string | undefined;

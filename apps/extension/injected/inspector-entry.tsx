@@ -27,6 +27,7 @@ import {
   watchCustomThemeSetting,
   type InspectorColorScheme,
 } from "~lib/settings";
+import { appendDiagnostic, installGlobalDiagnostics } from "~lib/diagnostics";
 import {
   InspectorWindow,
   PanelHost,
@@ -2099,6 +2100,16 @@ class InspectorErrorBoundary extends Component<
     };
   }
 
+  componentDidCatch(error: unknown): void {
+    void appendDiagnostic({
+      source: "inspector",
+      level: "error",
+      message: `Inspector stopped: ${
+        error instanceof Error && error.message ? error.message : String(error)
+      }`,
+    }).catch(() => undefined);
+  }
+
   render() {
     if (this.state.message === null) return this.props.children;
     return (
@@ -2262,6 +2273,12 @@ function renderSurface(): Element | null {
 }
 
 function bootstrap() {
+  // Before anything that can throw: a bootstrap failure with no console (iPad)
+  // must at least leave a diagnostics entry for the popup to show. All of the
+  // bundle's code runs in this content-script world regardless of which mount
+  // (shadow host or iframe) the UI ends up in, so one install covers it.
+  installGlobalDiagnostics("inspector");
+
   const existing = document.getElementById(HOST_ID);
   if (existing) {
     // A live tree answers by calling preventDefault (see the SHOW_EVENT

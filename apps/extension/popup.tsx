@@ -18,8 +18,16 @@ import {
   saveColorSchemeSetting,
   saveCustomThemeSetting,
 } from "~lib/settings";
+import {
+  clearDiagnostics,
+  installGlobalDiagnostics,
+  readDiagnostics,
+  type DiagnosticEntry,
+} from "~lib/diagnostics";
 
 import "./popup.css";
+
+installGlobalDiagnostics("popup");
 
 const PopupShell = styled.main`
   display: flex;
@@ -211,6 +219,42 @@ const Feature = styled.li`
   }
 `;
 
+/**
+ * The diagnostics log rendered as text. The popup is a separate document that
+ * survives the inspected page's death, which makes this the one "console"
+ * available on an iPad: crashes recorded by the background's session sweep
+ * and uncaught extension errors both surface here.
+ */
+const DiagnosticsList = styled.ol`
+  display: grid;
+  gap: ${({ theme }) => theme.spacing.radius.xs};
+  margin: 0;
+  padding: ${({ theme }) => theme.spacing.radius.xs};
+  list-style: none;
+  max-height: 180px;
+  overflow: auto;
+  border: solid 1px ${({ theme }) => theme.colors.grayLight};
+  border-radius: ${({ theme }) => theme.spacing.radius.xs};
+`;
+
+const DiagnosticItem = styled.li<{ $level: DiagnosticEntry["level"] }>`
+  ${({ theme }) => styledSmall(theme)};
+  font-family: ${({ theme }) => theme.fonts.mono};
+  color: ${({ theme, $level }) =>
+    $level === "error" ? theme.colors.error : theme.colors.grayDark};
+  overflow-wrap: anywhere;
+`;
+
+const DiagnosticMeta = styled.span`
+  color: ${({ theme }) => theme.colors.gray};
+`;
+
+const EmptyDiagnostics = styled.p`
+  ${({ theme }) => styledSmall(theme)};
+  margin: 0;
+  color: ${({ theme }) => theme.colors.grayDark};
+`;
+
 type LaunchState = "idle" | "loading" | "success" | "error";
 
 const INSPECTOR_HOST_ID = "inspector-lab-extension-root";
@@ -316,10 +360,40 @@ function Popup() {
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
   const [message, setMessage] = useState("");
   const [customTheme, setCustomTheme] = useState(true);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     void readCustomThemeSetting().then(setCustomTheme);
+    void readDiagnostics().then(setDiagnostics);
   }, []);
+
+  async function toggleDiagnostics() {
+    // Re-read on open: the background sweep may have run since mount.
+    if (!diagnosticsOpen) setDiagnostics(await readDiagnostics());
+    setDiagnosticsOpen(!diagnosticsOpen);
+  }
+
+  async function copyDiagnostics() {
+    const text = diagnostics
+      .map(
+        (entry) =>
+          `[${new Date(entry.time).toISOString()}] ${entry.source} ${entry.level}: ${entry.message}`,
+      )
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* Clipboard denied: the list stays readable on screen. */
+    }
+  }
+
+  async function onClearDiagnostics() {
+    if (await clearDiagnostics()) setDiagnostics([]);
+  }
 
   /* Optimistic flip; an open inspector rethemes live via storage.onChanged. */
   function onCustomThemeChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -440,6 +514,52 @@ function Popup() {
             {message}
           </Callout>
         )}
+
+        <Flex $alignItems="center" $justifyContent="space-between" $gap={12}>
+          <Button
+            $size="small"
+            $outline
+            $icon={<Icon name="ScrollText" />}
+            aria-expanded={diagnosticsOpen}
+            onClick={toggleDiagnostics}
+          >
+            {diagnosticsOpen
+              ? "Hide diagnostics"
+              : `Diagnostics${diagnostics.length > 0 ? ` (${diagnostics.length})` : ""}`}
+          </Button>
+          {diagnosticsOpen && diagnostics.length > 0 && (
+            <Flex $gap={12}>
+              <Button $size="small" $outline onClick={copyDiagnostics}>
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <Button $size="small" $outline onClick={onClearDiagnostics}>
+                Clear
+              </Button>
+            </Flex>
+          )}
+        </Flex>
+
+        {diagnosticsOpen &&
+          (diagnostics.length > 0 ? (
+            <DiagnosticsList aria-label="Diagnostics log">
+              {[...diagnostics].reverse().map((entry, index) => (
+                <DiagnosticItem
+                  key={`${entry.time}-${index}`}
+                  $level={entry.level}
+                >
+                  <DiagnosticMeta>
+                    {new Date(entry.time).toLocaleString()} · {entry.source}
+                  </DiagnosticMeta>{" "}
+                  {entry.message}
+                </DiagnosticItem>
+              ))}
+            </DiagnosticsList>
+          ) : (
+            <EmptyDiagnostics>
+              No diagnostics recorded. Extension errors and sessions that end
+              without a clean close will show up here.
+            </EmptyDiagnostics>
+          ))}
       </PopupShell>
     </ThemeProvider>
   );
