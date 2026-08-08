@@ -110,9 +110,29 @@ make the picker ambiguous.
 
 Kagi documents iOS and iPadOS extension support as **beta with a reduced API
 surface**, because Apple caps what any iOS browser may expose. Treat the mobile
-build as a strong subset rather than a promise of every panel. Elements,
-Console, Sources, and Storage are the least dependent on extension APIs;
-Network and Cookies lean on APIs that iOS may not offer.
+build as a strong subset rather than a promise of every panel.
+
+The inspector plans for that: when the extension background cannot be reached,
+the panels that need it switch to in-page fallbacks instead of going dark, and
+each one says on screen which source it is using.
+
+- **Elements, Sources, and Storage** work entirely in the page and need no
+  extension APIs.
+- **Console** evaluates through the extension when it can, and through an
+  in-page script when it cannot. Sites whose Content Security Policy forbids
+  inline scripts or `eval` block the fallback — the error says so when it
+  happens.
+- **Cookies** reads the browser's cookie store when the extension answers, and
+  falls back to `document.cookie` when it does not. The fallback cannot see
+  HttpOnly cookies, and it only knows each cookie's name and value — the other
+  columns show a dash instead of a guess.
+- **Network** shows the page's own fetch/XHR traffic where capture can be
+  installed; the headers-only request log needs `chrome.webRequest`, which iOS
+  does not offer.
+
+If a panel reports a specific error instead of data, that message is the
+ground truth for what this browser build supports — it names the API or policy
+that refused, rather than a generic connection failure.
 
 ---
 
