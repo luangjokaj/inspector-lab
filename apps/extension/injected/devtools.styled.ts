@@ -254,6 +254,11 @@ export const InspectorWindow = styled.section<{ $floating: boolean }>`
  * The top row: picker controls, the main tab strip, and window actions, all on
  * one line the way DevTools lays out its tabbed pane header. Doubles as the
  * drag handle — pointer handling skips buttons, so tabs stay clickable.
+ *
+ * Narrow windows push the window actions past the right edge, so the whole row
+ * scrolls sideways rather than clipping them out of reach. The scrollbar is
+ * hidden because it would eat a third of a 27px toolbar; a vertical wheel over
+ * a horizontal-only scroller pans it, same as the tab strip.
  */
 export const WindowToolbar = styled.header<{ $dragging: boolean }>`
   display: flex;
@@ -265,6 +270,14 @@ export const WindowToolbar = styled.header<{ $dragging: boolean }>`
   cursor: ${({ $dragging }) => ($dragging ? "grabbing" : "grab")};
   user-select: none;
   touch-action: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 `;
 
 /** Fills the gap between the tabs and the window actions; also drag surface. */
