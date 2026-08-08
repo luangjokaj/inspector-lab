@@ -37,6 +37,8 @@ import {
   ToolbarDivider,
   ToolbarSpacer,
   WindowToolbar,
+  devtoolsScrollbar,
+  devtoolsUi,
 } from "~injected/devtools.styled";
 import {
   FOREIGN_LAYER_ID,
@@ -351,44 +353,172 @@ const AboutBackdrop = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Keeps the card off the frame when the window is docked down to its
+     minimum, where the scrim is barely wider than the card itself. */
+  padding: 12px;
   /* Same hardcoded-scrim precedent as the picker highlight overlay. */
   background: rgba(0, 0, 0, 0.4);
 `;
 
 const AboutCard = styled.section`
-  width: 280px;
-  padding: 12px 14px;
-  color: ${({ theme }) => theme.devtools.text};
-  font-family: ${({ theme }) => theme.devtools.fontFamily};
-  font-size: ${({ theme }) => theme.devtools.fontSize};
-  line-height: ${({ theme }) => theme.devtools.lineHeight};
+  ${devtoolsUi};
+  ${devtoolsScrollbar};
+  display: grid;
+  gap: 12px;
+  width: 320px;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 14px;
+  overflow-y: auto;
   background: ${({ theme }) => theme.devtools.surface};
   border: solid 1px ${({ theme }) => theme.devtools.border};
+  /* The one rounded surface in the inspector: it floats over the panels
+     rather than butting against a viewport edge the way the frame does. */
+  border-radius: ${({ theme }) => theme.spacing.radius.xs};
   box-shadow: ${({ theme }) => theme.shadows.lg};
 `;
 
 const AboutHeader = styled.header`
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 10px;
 `;
 
-const AboutBody = styled.div`
-  display: grid;
-  gap: 4px;
+/**
+ * The logo mark on its own — the teal corner brackets around the amber
+ * cursor, lifted from the popup's full wordmark (`Logo()` in popup.tsx).
+ *
+ * The fills are the brand palette off the theme rather than the wordmark's
+ * literal #2ED3C3 / #F2B84B, because this mark is rendered at 32px on four
+ * different surfaces: `colors.primary` / `colors.secondary` are the same two
+ * hues re-inked per mode (deep teal + bronze on white, the signature bright
+ * pair on near-black), so the hairline strokes stay legible in every skin.
+ */
+const AboutMark = styled.svg`
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
 
-  p {
-    margin: 0;
+  .bracket {
+    fill: ${({ theme }) => theme.colors.primary};
   }
+
+  .cursor {
+    fill: ${({ theme }) => theme.colors.secondary};
+  }
+`;
+
+const AboutHeading = styled.div`
+  display: grid;
+  gap: 1px;
+  /* Takes the slack, so the close button sits against the far edge. */
+  flex: 1 1 auto;
+  min-width: 0;
+`;
+
+/** Two steps up from the body size — the only display type in the card. */
+const AboutName = styled.strong`
+  font-size: calc(${({ theme }) => theme.devtools.fontSize} + 2px);
+  font-weight: 600;
+`;
+
+const AboutSubhead = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+`;
+
+/** The version, badged so it reads as metadata and not as part of the name. */
+const AboutVersion = styled.span`
+  display: inline-flex;
+  align-items: center;
+  height: ${({ theme }) => theme.devtools.rowHeight};
+  padding: 0 6px;
+  color: ${({ theme }) => theme.devtools.accent};
+  font-variant-numeric: tabular-nums;
+  background: ${({ theme }) => theme.devtools.accentSubtle};
+  border-radius: 9999px;
+`;
+
+const AboutTagline = styled.p`
+  margin: 0;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+`;
+
+/**
+ * The homepage, given the weight of a button: accent text and a full-width
+ * accent hairline over the accent's own tint. Deliberately *not* a solid
+ * accent fill — `devtools.onAccent` is white in both branded skins (it exists
+ * for an 8px check mark), so filled label text would vanish on branded dark.
+ */
+const AboutPrimaryLink = styled.a`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Comfortably tappable on the iPads this runs on. */
+  min-height: ${({ theme }) => theme.devtools.touchTarget};
+  padding: 0 10px;
+  color: ${({ theme }) => theme.devtools.accent};
+  font-weight: 600;
+  text-decoration: none;
+  background: ${({ theme }) => theme.devtools.accentSubtle};
+  border: solid 1px ${({ theme }) => theme.devtools.accent};
+  border-radius: 2px;
+
+  svg {
+    flex: 0 0 auto;
+  }
+
+  /* The trailing "leaves the page" arrow, pinned to the far edge. */
+  svg:last-of-type {
+    margin-left: auto;
+  }
+
+  &:hover {
+    /* A flat gradient is the only way to stack a second tint on a background
+       color; the neutral hover token darkens on light skins and lightens on
+       dark ones, so one rule covers all four. */
+    background:
+      linear-gradient(
+        ${({ theme }) => theme.devtools.tabHoverBackground},
+        ${({ theme }) => theme.devtools.tabHoverBackground}
+      ),
+      ${({ theme }) => theme.devtools.accentSubtle};
+  }
+
+  &:focus-visible {
+    outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
+    outline-offset: 1px;
+  }
+`;
+
+const AboutFooter = styled.footer`
+  display: grid;
+  gap: 2px;
+  padding-top: 10px;
+  border-top: solid 1px ${({ theme }) => theme.devtools.border};
+`;
+
+const AboutFooterLinks = styled.div`
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
 `;
 
 const AboutMuted = styled.span`
   color: ${({ theme }) => theme.devtools.textSubtle};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
 `;
 
 const AboutLink = styled.a`
+  display: inline-flex;
+  align-items: center;
+  /* Same tap target as the primary link; the row keeps its own height. */
+  min-height: ${({ theme }) => theme.devtools.touchTarget};
   color: ${({ theme }) => theme.devtools.accent};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
   text-decoration: none;
 
   &:hover {
@@ -400,6 +530,29 @@ const AboutLink = styled.a`
     outline-offset: 1px;
   }
 `;
+
+/** The bracket-and-cursor mark, decorative: `AboutCard` carries the label. */
+function AboutLogoMark() {
+  return (
+    <AboutMark
+      aria-hidden="true"
+      viewBox="34 34 118 118"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <g className="bracket">
+        <path d="M35.2954 69.863V50.9418C35.2954 42.3005 42.3005 35.2954 50.9418 35.2954H69.863C72.8774 35.2954 75.3211 37.739 75.3211 40.7534C75.3211 43.7678 72.8774 46.2115 69.863 46.2115H50.9418C48.3293 46.2115 46.2115 48.3293 46.2115 50.9418V69.863C46.2115 72.8774 43.7678 75.3211 40.7534 75.3211C37.739 75.3211 35.2954 72.8774 35.2954 69.863Z" />
+        <path d="M140.09 69.863V50.9418C140.09 48.3293 137.972 46.2115 135.36 46.2115H116.438C113.424 46.2115 110.98 43.7678 110.98 40.7534C110.98 37.739 113.424 35.2954 116.438 35.2954H135.36C144.001 35.2954 151.006 42.3005 151.006 50.9418V69.863C151.006 72.8774 148.562 75.3211 145.548 75.3211C142.534 75.3211 140.09 72.8774 140.09 69.863Z" />
+        <path d="M140.09 135.36V116.438C140.09 113.424 142.534 110.98 145.548 110.98C148.562 110.98 151.006 113.424 151.006 116.438V135.36C151.006 144.001 144.001 151.006 135.36 151.006H116.438C113.424 151.006 110.98 148.562 110.98 145.548C110.98 142.534 113.424 140.09 116.438 140.09H135.36C137.972 140.09 140.09 137.972 140.09 135.36Z" />
+        <path d="M35.2954 135.36V116.438C35.2954 113.424 37.739 110.98 40.7534 110.98C43.7678 110.98 46.2115 113.424 46.2115 116.438V135.36C46.2115 137.972 48.3293 140.09 50.9418 140.09H69.863C72.8774 140.09 75.3211 142.534 75.3211 145.548C75.3211 148.562 72.8774 151.006 69.863 151.006H50.9418C42.3005 151.006 35.2954 144.001 35.2954 135.36Z" />
+      </g>
+      <g className="cursor">
+        <path d="M76.2307 68.8078L123.552 92.0045L102.211 100.355L93.8602 121.696L76.2307 68.8078Z" />
+        <path d="M74.6024 66.943C75.3529 66.2876 76.423 66.1499 77.3178 66.5882L124.639 89.7849C125.52 90.2168 126.067 91.1287 126.026 92.1091C125.985 93.0887 125.366 93.9532 124.453 94.3105L104.121 102.266L96.1662 122.597C95.7866 123.567 94.8379 124.197 93.7965 124.171C92.7553 124.144 91.8427 123.467 91.5133 122.479L73.8838 69.5901C73.5684 68.6441 73.8516 67.5993 74.6024 66.943ZM94.0422 114.428L99.905 99.4547L100.142 98.9999C100.421 98.5736 100.828 98.238 101.31 98.0493L117.412 91.7452L80.4425 73.6245L94.0422 114.428Z" />
+      </g>
+    </AboutMark>
+  );
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), Math.max(min, max));
@@ -1929,12 +2082,16 @@ function Inspector({
             onClick={(event) => event.stopPropagation()}
           >
             <AboutHeader>
-              <strong>
-                Inspector Lab - DevTools{" "}
-                {manifestVersion() && (
-                  <AboutMuted>v{manifestVersion()}</AboutMuted>
-                )}
-              </strong>
+              <AboutLogoMark />
+              <AboutHeading>
+                <AboutName>Inspector Lab</AboutName>
+                <AboutSubhead>
+                  DevTools
+                  {manifestVersion() && (
+                    <AboutVersion>v{manifestVersion()}</AboutVersion>
+                  )}
+                </AboutSubhead>
+              </AboutHeading>
               <ToolbarControls>
                 <IconButton
                   aria-label="Close about"
@@ -1944,23 +2101,38 @@ function Inspector({
                 </IconButton>
               </ToolbarControls>
             </AboutHeader>
-            <AboutBody>
-              <p>Created by Luan Gjokaj</p>
-              <p>
+
+            <AboutTagline>
+              Inspect and edit elements, styles, console, network and storage —
+              right where the page lives, on any device.
+            </AboutTagline>
+
+            <AboutPrimaryLink
+              href="https://inspectorlab.dev"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              <Icon name="Globe" size={14} />
+              inspectorlab.dev
+              <Icon name="ArrowUpRight" size={14} />
+            </AboutPrimaryLink>
+
+            <AboutFooter>
+              <AboutMuted>Created by Luan Gjokaj</AboutMuted>
+              <AboutFooterLinks>
                 <AboutLink
                   href="https://riangle.com"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noreferrer noopener"
                 >
                   riangle.com
                 </AboutLink>
-              </p>
-              <p>
+                <ToolbarDivider />
                 <AboutLink href="mailto:luan@riangle.com">
                   luan@riangle.com
                 </AboutLink>
-              </p>
-            </AboutBody>
+              </AboutFooterLinks>
+            </AboutFooter>
           </AboutCard>
         </AboutBackdrop>
       )}

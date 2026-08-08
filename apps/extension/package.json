@@ -30,6 +30,7 @@
     "typescript": "^7.0.2"
   },
   "manifest": {
+    "homepage_url": "https://inspectorlab.dev",
     "permissions": [
       "activeTab",
       "cookies",
