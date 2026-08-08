@@ -36,8 +36,8 @@ Highlights:
 The extension is not on the Chrome Web Store yet, so it runs from a local build:
 
 ```bash
-git clone git@github.com:luangjokaj/dev-inspector.git
-cd dev-inspector
+git clone git@github.com:luangjokaj/inspector-lab.git
+cd inspector-lab
 pnpm install
 pnpm build
 ```
