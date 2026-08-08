@@ -36,3 +36,5 @@ Chrome itself supports no extensions on iPad or Android, which still surprises p
 Inspector Lab does not pretend to replace the full DevTools application. Some things genuinely require the debugger protocol: breakpoints, CPU profiles, bypassing a page's CSP. The [feature tour](FEATURES.md) is honest about every boundary. The goal is different: the twenty inspections you actually do all day, on any machine that can run a browser extension, two taps from the page you are supervising.
 
 Built by a developer who reviews more code than he writes now, for everyone working the same way.
+
+[Luan](https://github.com/luangjokaj) · [MIT](https://choosealicense.com/licenses/mit/)
