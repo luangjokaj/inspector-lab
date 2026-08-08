@@ -355,6 +355,34 @@ function maxDockWidth(): number {
 }
 
 /**
+ * Preventing the pointerdown default does not stop the mousedown that follows
+ * it from starting a text selection, so moving or resizing the window used to
+ * smear a highlight across whatever page content the cursor passed over. Lock
+ * selection off at the document root for the length of the gesture instead —
+ * the page keeps whatever it had selected, it just cannot grow it. Returns the
+ * undo, which the pointerup handler calls.
+ */
+function suppressPageSelection(): () => void {
+  const root = document.documentElement;
+  const previous = ["user-select", "-webkit-user-select"].map((property) => ({
+    property,
+    value: root.style.getPropertyValue(property),
+    priority: root.style.getPropertyPriority(property),
+  }));
+
+  for (const { property } of previous) {
+    root.style.setProperty(property, "none", "important");
+  }
+
+  return () => {
+    for (const { property, value, priority } of previous) {
+      if (value) root.style.setProperty(property, value, priority);
+      else root.style.removeProperty(property);
+    }
+  };
+}
+
+/**
  * Console evaluation runs in the page's MAIN world, which only the background
  * service worker can reach (chrome.scripting is not available here). If the
  * extension was reloaded since injection, the runtime link is dead and
@@ -1113,6 +1141,7 @@ function Inspector({ host }: { host: HTMLElement }) {
     if (target.closest("button")) return;
 
     event.preventDefault();
+    const releaseSelection = suppressPageSelection();
     setDragging(true);
 
     // Dragging a docked window tears it off into floating mode, re-centered
@@ -1163,12 +1192,15 @@ function Inspector({ host }: { host: HTMLElement }) {
     };
     const end = () => {
       setDragging(false);
+      releaseSelection();
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
     };
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end, { once: true });
+    window.addEventListener("pointercancel", end, { once: true });
   }
 
   /**
@@ -1182,6 +1214,7 @@ function Inspector({ host }: { host: HTMLElement }) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    const releaseSelection = suppressPageSelection();
     const start = { x: event.clientX, y: event.clientY, frame };
     const minWidth = Math.min(
       MIN_WIDTH,
@@ -1236,18 +1269,22 @@ function Inspector({ host }: { host: HTMLElement }) {
       });
     };
     const end = () => {
+      releaseSelection();
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
     };
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end, { once: true });
+    window.addEventListener("pointercancel", end, { once: true });
   }
 
   /** Drags the page-facing edge of a docked window to change the split. */
   function beginDockResize(event: React.PointerEvent<HTMLElement>) {
     if (event.button !== 0 || dock === "floating") return;
     event.preventDefault();
+    const releaseSelection = suppressPageSelection();
     const side = dock;
     const start = {
       x: event.clientX,
@@ -1284,12 +1321,15 @@ function Inspector({ host }: { host: HTMLElement }) {
       }
     };
     const end = () => {
+      releaseSelection();
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
     };
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end, { once: true });
+    window.addEventListener("pointercancel", end, { once: true });
   }
 
   function dockResizeWithKeyboard(event: React.KeyboardEvent<HTMLElement>) {
