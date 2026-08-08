@@ -37,4 +37,4 @@ Inspector Lab does not pretend to replace the full DevTools application. Some th
 
 Built by a developer who reviews more code than he writes now, for everyone working the same way.
 
-[Luan](https://github.com/luangjokaj) · [MIT](https://choosealicense.com/licenses/mit/)
+[MIT](LICENSE) © [Luan Gjokaj](https://github.com/luangjokaj)

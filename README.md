@@ -87,4 +87,4 @@ Issues and pull requests are welcome. If you are planning a larger change, pleas
 
 ## License
 
-[MIT](LICENSE) © Luan Gjokaj
+[MIT](LICENSE) © [Luan Gjokaj](https://github.com/luangjokaj)
