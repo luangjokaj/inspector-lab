@@ -84,9 +84,9 @@ for this extension, but the listing looks abandoned without the other two.
 | Field              | Tab     | Status for us                     | Value                                                              |
 | ------------------ | ------- | --------------------------------- | ------------------------------------------------------------------ |
 | **Privacy policy** | Privacy | **Required** (see below)          | `https://github.com/luangjokaj/inspector-lab/blob/main/PRIVACY.md` |
-| Homepage URL       | Listing | Recommended                       | `https://github.com/luangjokaj/inspector-lab`                      |
+| Homepage URL       | Listing | Recommended                       | `https://inspectorlab.dev`                                         |
 | Support URL        | Listing | Recommended                       | `https://github.com/luangjokaj/inspector-lab/issues`               |
-| Official URL       | Listing | Optional, needs a verified domain | none today — see the privacy policy note about `riangle.com`       |
+| Official URL       | Listing | Optional, needs a verified domain | `https://inspectorlab.dev` once verified in Search Console         |
 
 "Official URL" is the one that earns the verified badge on the listing: it can
 only be chosen from domains verified as yours in Google Search Console, so a
@@ -292,10 +292,10 @@ data handling ever changes, update `PRIVACY.md` in the same commit as the code
 change — the 2026 policy also requires proactively disclosing changes to data
 handling after install.
 
-Optional upgrade: serving the policy from a domain you own (for example
-`riangle.com`) lets the same domain be verified in Google Search Console and
-used as the listing's **Official URL**, which shows a verified badge. GitHub
-works fine without that.
+Optional upgrade: serving the policy from `inspectorlab.dev` (the project's own
+domain) lets that domain be verified in Google Search Console and used as the
+listing's **Official URL**, which shows a verified badge. GitHub works fine
+without that.
 
 Sources:
 https://developer.chrome.com/docs/webstore/program-policies/user-data-faq and

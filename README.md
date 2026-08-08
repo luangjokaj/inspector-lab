@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/luangjokaj/inspector-lab"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/header/grid.svg?title=Inspector+Lab&amp;subtitle=DevTools+anywhere.+Even+on+iPad.&amp;logo=https%3A%2F%2Ffiles.riangle.com%2Finspector-lab%2Ficon.png&amp;size=wide&amp;mode=dark&amp;font=geist" /><img alt="Doccupine" src="https://shieldcn.dev/header/grid.svg?title=Inspector+Lab&amp;subtitle=DevTools+anywhere.+Even+on+iPad.&amp;logo=https%3A%2F%2Ffiles.riangle.com%2Finspector-lab%2Ficon.png&amp;size=wide&amp;mode=light&amp;font=geist" /></picture></a>
+  <a href="https://inspectorlab.dev"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/header/grid.svg?title=Inspector+Lab&amp;subtitle=DevTools+anywhere.+Even+on+iPad.&amp;logo=https%3A%2F%2Ffiles.riangle.com%2Finspector-lab%2Ficon.png&amp;size=wide&amp;mode=dark&amp;font=geist" /><img alt="Inspector Lab" src="https://shieldcn.dev/header/grid.svg?title=Inspector+Lab&amp;subtitle=DevTools+anywhere.+Even+on+iPad.&amp;logo=https%3A%2F%2Ffiles.riangle.com%2Finspector-lab%2Ficon.png&amp;size=wide&amp;mode=light&amp;font=geist" /></picture></a>
 </p>
 
 <p align="center">
@@ -10,6 +10,8 @@
 # Inspector Lab - DevTools
 
 A movable, resizable in-page inspector built as a Manifest V3 Chrome extension. Open source under the MIT license.
+
+Website and docs: **[inspectorlab.dev](https://inspectorlab.dev)**
 
 [![Inspector Lab - DevTools](https://files.riangle.com/inspector-lab/inspector-lab-devtools.png)](https://files.riangle.com/inspector-lab/ipad-demo.mp4)
 
