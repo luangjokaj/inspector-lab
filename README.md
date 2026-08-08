@@ -14,10 +14,10 @@ A movable, resizable in-page inspector built as a Manifest V3 Chrome extension. 
 ![Inspector Lab - DevTools](https://files.riangle.com/inspector-lab/inspector-lab-devtools.png)
 
 <p align="center">
-  <video src="https://files.riangle.com/inspector-lab/ipad-demo-1.mov" controls width="720"></video>
+  <video src="https://files.riangle.com/inspector-lab/ipad-demo.mp4" controls width="720"></video>
 </p>
 
-<p align="center"><sub>Inspector Lab - DevTools running on an iPad. <a href="https://files.riangle.com/inspector-lab/ipad-demo-1.mov">Open the clip directly</a> if it does not play inline.</sub></p>
+<p align="center"><sub>Inspector Lab - DevTools running on an iPad. <a href="https://files.riangle.com/inspector-lab/ipad-demo.mp4">Open the clip directly</a> if it does not play inline.</sub></p>
 
 **[What is Inspector Lab - DevTools, and why I built it →](docs/ABOUT.md)** — devtools for the agent-orchestration era: full inspection on any device that runs a browser extension, iPad included.
 
