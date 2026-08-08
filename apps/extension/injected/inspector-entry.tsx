@@ -432,9 +432,7 @@ let evaluateViaPage = false;
  *  failing bridge can report the root cause instead of only its own. */
 let evalTransportError: unknown = null;
 
-async function evaluateExpression(
-  expression: string,
-): Promise<EvaluateResponse> {
+async function evaluateOnce(expression: string): Promise<EvaluateResponse> {
   if (!evaluateViaPage) {
     try {
       const request: EvaluateRequest = { type: EVALUATE_MESSAGE, expression };
@@ -473,6 +471,47 @@ async function evaluateExpression(
           : "Could not evaluate in this page.",
     };
   }
+}
+
+/**
+ * The characters iOS Smart Punctuation substitutes while typing: `"log"`
+ * reaches the prompt as `“log”`, and `i--` as `i—`. JavaScript rejects all of
+ * them, which on an iPad — the device this inspector exists for — makes the
+ * console look broken the first time anyone types a string.
+ */
+const SMART_PUNCTUATION = /[“”‘’—]/;
+
+function straightenSmartPunctuation(expression: string): string {
+  return expression
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/—/g, "--");
+}
+
+/**
+ * Evaluates the prompt's expression, straightening smart punctuation when that
+ * is what stood between the input and parsing.
+ *
+ * The straightened form is only ever a retry, not a rewrite-first: curly
+ * quotes are legal inside string literals, and blindly straightening would
+ * corrupt a pasted `'don’t'` that parses fine as typed. The retry is gated on
+ * a SyntaxError, which also makes the second run safe — a parse error proves
+ * the first attempt executed nothing.
+ */
+async function evaluateExpression(
+  expression: string,
+): Promise<EvaluateResponse> {
+  const response = await evaluateOnce(expression);
+  if (
+    !response.ok &&
+    response.preview.includes("SyntaxError") &&
+    SMART_PUNCTUATION.test(expression)
+  ) {
+    // Whatever the retry produces is the more truthful answer: success, or
+    // the error the expression actually has once its quotes are real quotes.
+    return evaluateOnce(straightenSmartPunctuation(expression));
+  }
+  return response;
 }
 
 /**
