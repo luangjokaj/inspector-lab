@@ -109,26 +109,33 @@ make the picker ambiguous.
 ### What to expect on iOS
 
 Kagi documents iOS and iPadOS extension support as **beta with a reduced API
-surface**, because Apple caps what any iOS browser may expose. Treat the mobile
-build as a strong subset rather than a promise of every panel.
+surface**, because Apple caps what any iOS browser may expose. The inspector is
+built for that: wherever the extension background cannot be reached, the panels
+that need it switch to in-page fallbacks instead of going dark, and each one
+says on screen which source it is using.
 
-The inspector plans for that: when the extension background cannot be reached,
-the panels that need it switch to in-page fallbacks instead of going dark, and
-each one says on screen which source it is using.
+**Verified on a real iPad**: Elements, Console, Sources, Cookies, and Storage
+all work; Network works partially. Panel by panel:
 
 - **Elements, Sources, and Storage** work entirely in the page and need no
   extension APIs.
-- **Console** evaluates through the extension when it can, and through an
-  in-page script when it cannot. Sites whose Content Security Policy forbids
-  inline scripts or `eval` block the fallback — the error says so when it
-  happens.
-- **Cookies** reads the browser's cookie store when the extension answers, and
-  falls back to `document.cookie` when it does not. The fallback cannot see
-  HttpOnly cookies, and it only knows each cookie's name and value — the other
-  columns show a dash instead of a guess.
-- **Network** shows the page's own fetch/XHR traffic where capture can be
-  installed; the headers-only request log needs `chrome.webRequest`, which iOS
-  does not offer.
+- **Console** captures page logs and evaluates expressions — through the
+  extension when it answers, and through an in-page script when it does not.
+  It also straightens iOS Smart Punctuation: type `console.log("log")` and the
+  keyboard's curly `“ ”` quotes (and the `—` it makes of `--`) are corrected
+  automatically when they are what stopped the expression from parsing. Sites
+  whose Content Security Policy forbids inline scripts or `eval` block the
+  fallback — the error says so when it happens.
+- **Cookies** lists, adds, edits, and deletes cookies. It reads the browser's
+  cookie store when the extension answers, and falls back to `document.cookie`
+  when it does not. The fallback cannot see HttpOnly cookies, and it only
+  knows each cookie's name and value — the other columns show a dash instead
+  of a guess, and a status line names the source in use.
+- **Network** captures the page's own fetch/XHR traffic live, with headers and
+  bodies. The partial part: the headers-only log of static resources
+  (documents, stylesheets, images, fonts) needs `chrome.webRequest`, which iOS
+  does not offer — those rows come from the Performance timeline instead,
+  without header details.
 
 If a panel reports a specific error instead of data, that message is the
 ground truth for what this browser build supports — it names the API or policy

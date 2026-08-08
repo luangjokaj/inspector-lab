@@ -31,6 +31,7 @@ Inspector Lab - DevTools is a movable, resizable devtools window that lives dire
 - **Evaluate expressions** in the page's own JavaScript context from the prompt, with DevTools-style `›` input and `‹` result rows.
 - **Values colored by type**, like DevTools: numbers, booleans, and null/undefined logged as arguments — and primitive evaluation results, including quoted strings — render in the same syntax palette the Elements tree uses, in every theme. Error and warning rows keep their level color for the whole line, exactly as Chrome does.
 - **Source links**: each captured entry shows the `file:line` it was logged from, right-aligned like DevTools — whenever a page frame can be identified from the call stack.
+- **iPad keyboards just work**: iOS Smart Punctuation turns `"log"` into `“log”` and `i--` into `i—` as you type, which JavaScript rejects. When curly punctuation is what stopped an expression from parsing, the prompt retries it straightened — and only then, so a curly apostrophe pasted inside a valid string is never rewritten.
 - Filter by text or level, clear the feed, and rely on the same 1,000-entry cap DevTools uses.
 - Honest about limits: sites whose Content Security Policy blocks `eval` will say so instead of failing silently.
 
@@ -81,6 +82,7 @@ Inspector Lab - DevTools is a movable, resizable devtools window that lives dire
 
 ## Current boundaries
 
+- On browsers with a reduced extension API surface (Orion on iOS and iPadOS), panels that cannot reach the extension background switch to in-page fallbacks and label the source on screen: console evaluation runs through an injected page script, and the cookie table reads `document.cookie` — which cannot see HttpOnly cookies and only knows names and values, so the other columns show a dash. The Network panel keeps live fetch/XHR capture but loses the `webRequest` header log of static resources.
 - Console and network capture from page boot require the per-site grant and kick in from the first reload after launch; without the grant, capture starts when the inspector opens.
 - Response bodies are captured for fetch/XHR requests only (capped at 20 KB); static resources expose headers via `webRequest` but never contents — full-body capture for everything would require `chrome.debugger` and its permanent warning banner.
 - Cross-origin iframe contents and protected pages (`chrome://`, the Web Store) are out of reach.

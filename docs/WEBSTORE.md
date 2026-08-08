@@ -51,7 +51,7 @@ Orion by Kagi (free on the App Store) is the browser that makes this work on iOS
 2. Scroll to the Extensions group and turn on Chrome extensions.
 3. Reopen the ••• menu, tap Extensions, tap the + button, and install Inspector Lab - DevTools from the Chrome Web Store.
 
-Orion's extension support on iOS and iPadOS is still in beta, and Apple limits which extension APIs any browser may offer there, so treat the mobile build as a strong subset rather than a promise of every panel. Orion on macOS installs this extension the same way, with the fuller desktop API surface.
+Orion's extension support on iOS and iPadOS is still in beta, and Apple limits which extension APIs any browser may offer there. The inspector is built for that gap: panels fall back to in-page sources when an extension API is missing, and say so on screen. Verified on a real iPad: Elements, Console, Sources, Cookies, and Storage all work; Network captures the page's fetch/XHR traffic live, while the headers of static resources (a desktop webRequest feature) stay out of reach. Orion on macOS installs this extension the same way, with the fuller desktop API surface.
 
 MOBILE AND TABLET, MORE BROADLY
 
@@ -114,12 +114,14 @@ of August 2026: ••• menu → Settings → Extensions group → enable Chro
 extensions → ••• menu → Extensions → **+** → install from the Chrome Web Store.
 Kagi documents iOS/iPadOS extension support as **beta with a reduced API
 surface**, because Apple caps what any iOS browser may expose; macOS Orion has
-the fuller set. Practical consequence: verify the Cookies panel
-(`chrome.cookies`) and the Network panel's header capture (`chrome.webRequest`)
-on a real iPad before making per-panel promises in the listing — the Elements,
-Console, Sources, and Storage panels rest on APIs that are far likelier to be
-present. The store copy is deliberately hedged ("a strong subset rather than a
-promise of every panel") until that testing is done.
+the fuller set. **Verified on a real iPad (August 2026)**: Elements, Console,
+Sources, Cookies, and Storage all work, and Network works partially — live
+fetch/XHR capture yes, the `chrome.webRequest` headers-only log of static
+resources no. The extension carries in-page fallbacks (console evaluation via
+an injected page script, cookies via `document.cookie`) precisely so a missing
+extension API degrades a panel visibly instead of killing it, which is what
+makes those per-panel claims safe to keep in the store copy even as Orion's
+beta surface shifts between releases.
 Docs: https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html
 Orion: https://orionbrowser.com/
 

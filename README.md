@@ -13,6 +13,12 @@ A movable, resizable in-page inspector built as a Manifest V3 Chrome extension. 
 
 ![Inspector Lab - DevTools](https://files.riangle.com/inspector-lab/inspector-lab-devtools.png)
 
+<p align="center">
+  <video src="https://files.riangle.com/inspector-lab/ipad-demo-1.mov" controls width="720"></video>
+</p>
+
+<p align="center"><sub>Inspector Lab - DevTools running on an iPad. <a href="https://files.riangle.com/inspector-lab/ipad-demo-1.mov">Open the clip directly</a> if it does not play inline.</sub></p>
+
 **[What is Inspector Lab - DevTools, and why I built it →](docs/ABOUT.md)** — devtools for the agent-orchestration era: full inspection on any device that runs a browser extension, iPad included.
 
 ## Features
@@ -44,7 +50,7 @@ pnpm build
 
 Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `apps/extension/build/chrome-mv3-prod`.
 
-Works in desktop Chrome and Chromium-based browsers, and in [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html) on iOS and iPadOS, a [free download for iPhone and iPad](https://orionbrowser.com/).
+Works in desktop Chrome and Chromium-based browsers, and in [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html) on iOS and iPadOS, a [free download for iPhone and iPad](https://orionbrowser.com/). On the iPad, Elements, Console, Sources, Cookies, and Storage all work, and Network captures live fetch/XHR traffic — where iOS trims the extension API surface, panels fall back to in-page sources and say so instead of going dark.
 
 **On an iPad or iPhone**, Orion installs the extension from a folder you first copy into `On My iPad → Orion → Extensions`, then pick with **⋯ → Extensions → + → Install from File**. Run `pnpm package` for a 1.2 MB zip to move across, and follow **[the step-by-step install guide →](docs/INSTALL.md)**.
 
