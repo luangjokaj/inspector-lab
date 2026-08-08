@@ -922,7 +922,17 @@ function InlineEditor({
         aria-label={label}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        onFocus={(event) => event.target.select()}
+        onFocus={(event) => {
+          // Select-all so typing replaces the old value, as in DevTools. The
+          // immediate call covers Chromium; WebKit (Orion, Safari) undoes a
+          // select() made during the focus event itself, so it runs again on
+          // the next frame — after whatever caret placement undid it.
+          const input = event.currentTarget;
+          input.select();
+          requestAnimationFrame(() => {
+            if (input.isConnected) input.select();
+          });
+        }}
         onBlur={() => finish("blur")}
         onKeyDown={(event) => {
           // The tree's own arrow/typing shortcuts must not see editor keys.
