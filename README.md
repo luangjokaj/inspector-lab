@@ -50,6 +50,8 @@ Works in desktop Chrome and Chromium-based browsers, and in [Orion by Kagi](http
 
 **On an iPad or iPhone**, Orion installs the extension from a folder you first copy into `On My iPad → Orion → Extensions`, then pick with **⋯ → Extensions → + → Install from File**. Run `pnpm package` for a 1.2 MB zip to move across, and follow **[the step-by-step install guide →](docs/INSTALL.md)**.
 
+![Inspector Lab - DevTools on iPadOS](https://files.riangle.com/inspector-lab/ipados-inspector-lab-devtools.png)
+
 ## Development
 
 Requires Node 20+ and pnpm 9+.
