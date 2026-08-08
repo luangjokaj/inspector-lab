@@ -400,6 +400,14 @@ export const Tab = styled.button<{ $selected: boolean }>`
     background: ${({ theme }) => theme.devtools.tabHoverBackground};
   }
 
+  /* Panels the current page cannot support: visible but inert. */
+  &:disabled,
+  &:disabled:hover {
+    color: ${({ theme }) => theme.devtools.textSubtle};
+    background: transparent;
+    cursor: not-allowed;
+  }
+
   ${focusRing};
 
   &::after {

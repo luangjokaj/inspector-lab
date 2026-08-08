@@ -1,3 +1,6 @@
+// Must stay first: patches this world's document.createElement on non-HTML
+// documents before React or styled-components create a single element.
+import { isHtmlDom } from "~injected/xml-compat";
 import {
   Component,
   useCallback,
@@ -35,15 +38,20 @@ import {
   WindowToolbar,
 } from "~injected/devtools.styled";
 import {
+  FOREIGN_LAYER_ID,
   HIGHLIGHT_ID,
   HOST_ID,
   SHOW_EVENT,
   describeElement,
+  getOverlayRoot,
   highlightElement,
   isInspectorNode,
+  overlayPosition,
+  setOverlayRoot,
   snapshotElement,
   type ElementSnapshot,
   type MatchedRule,
+  type StylableElement,
 } from "~injected/inspector-dom";
 import {
   applyStateStyles,
@@ -151,6 +159,40 @@ const TABS = [
   "Storage",
 ] as const;
 type TabName = (typeof TABS)[number];
+
+/**
+ * Which panels can function in this document, decided once at injection: the
+ * answers depend on the document and its protocol, neither of which changes
+ * while the inspector is open. Unavailable tabs render disabled instead of
+ * opening a panel that could only ever show an error.
+ */
+function computeTabAvailability(): Record<TabName, boolean> {
+  // Cookies exist only for http(s) origins — chrome.cookies has nothing for
+  // file:/data: documents and document.cookie reads empty there, so the panel
+  // could never show anything real.
+  const cookies =
+    location.protocol === "http:" || location.protocol === "https:";
+
+  // Sandboxed and opaque-origin documents throw on storage access.
+  let storage = true;
+  try {
+    void window.localStorage;
+    void window.sessionStorage;
+  } catch {
+    storage = false;
+  }
+
+  return {
+    Elements: true,
+    Console: true,
+    Sources: true,
+    Network: true,
+    Cookies: cookies,
+    Storage: storage,
+  };
+}
+
+const TAB_AVAILABILITY = computeTabAvailability();
 
 type Frame = {
   left: number;
@@ -378,24 +420,28 @@ function maxDockWidth(): number {
  * the page keeps whatever it had selected, it just cannot grow it. Returns the
  * undo, which the pointerup handler calls.
  */
-function suppressPageSelection(): () => void {
-  const root = document.documentElement;
-  const previous = ["user-select", "-webkit-user-select"].map((property) => ({
-    property,
-    value: root.style.getPropertyValue(property),
-    priority: root.style.getPropertyPriority(property),
-  }));
+function suppressPageSelection(docs: readonly Document[]): () => void {
+  const undos = docs.map((doc) => {
+    const root = doc.documentElement;
+    const previous = ["user-select", "-webkit-user-select"].map((property) => ({
+      property,
+      value: root.style.getPropertyValue(property),
+      priority: root.style.getPropertyPriority(property),
+    }));
 
-  for (const { property } of previous) {
-    root.style.setProperty(property, "none", "important");
-  }
-
-  return () => {
-    for (const { property, value, priority } of previous) {
-      if (value) root.style.setProperty(property, value, priority);
-      else root.style.removeProperty(property);
+    for (const { property } of previous) {
+      root.style.setProperty(property, "none", "important");
     }
-  };
+
+    return () => {
+      for (const { property, value, priority } of previous) {
+        if (value) root.style.setProperty(property, value, priority);
+        else root.style.removeProperty(property);
+      }
+    };
+  });
+
+  return () => undos.forEach((undo) => undo());
 }
 
 /**
@@ -762,7 +808,19 @@ function initialFrame(): Frame {
   };
 }
 
-function Inspector({ host }: { host: HTMLElement }) {
+/**
+ * `uiWindow` is the window the inspector's own DOM lives in: the page window
+ * on HTML documents (shadow-DOM host), the iframe's window on non-HTML
+ * documents (iframe host). Keyboard and pointer events raised inside the UI
+ * fire there, not on the page window.
+ */
+function Inspector({
+  host,
+  uiWindow,
+}: {
+  host: HTMLElement;
+  uiWindow: Window;
+}) {
   const themeTokens = useTheme();
   const [frame, setFrame] = useState<Frame>(initialFrame);
   // Docked to the bottom by default, like DevTools' own default dock side.
@@ -782,13 +840,12 @@ function Inspector({ host }: { host: HTMLElement }) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [tab, setTab] = useState<TabName>("Elements");
   const [snapshot, setSnapshot] = useState<ElementSnapshot | null>(null);
-  const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(
-    null,
-  );
+  const [selectedElement, setSelectedElement] =
+    useState<StylableElement | null>(null);
   const [forcedStates, setForcedStates] =
     useState<ForcedStateMap>(noStatesForced);
   const [stateStylesByElement, setStateStylesByElement] = useState<
-    Map<HTMLElement, StateStyleMap>
+    Map<StylableElement, StateStyleMap>
   >(() => new Map());
   const [sourceReveal, setSourceReveal] = useState<SourceRevealRequest | null>(
     null,
@@ -1038,7 +1095,7 @@ function Inspector({ host }: { host: HTMLElement }) {
   }, [host]);
 
   const selectElement = useCallback(
-    (element: HTMLElement) => {
+    (element: StylableElement) => {
       setSelectedElement(element);
       setSnapshot(snapshotElement(element));
       log("log", `Selected ${describeElement(element)}`);
@@ -1139,6 +1196,7 @@ function Inspector({ host }: { host: HTMLElement }) {
 
   /** User-driven panel switch: applied, marked, and persisted per site. */
   const selectTab = useCallback((name: TabName) => {
+    if (!TAB_AVAILABILITY[name]) return;
     userPickedTab.current = true;
     setTab(name);
     void trackInspector(true, name);
@@ -1166,19 +1224,26 @@ function Inspector({ host }: { host: HTMLElement }) {
       if (
         !userPickedTab.current &&
         typeof saved === "string" &&
-        (TABS as readonly string[]).includes(saved)
+        (TABS as readonly string[]).includes(saved) &&
+        TAB_AVAILABILITY[saved as TabName]
       ) {
         setTab(saved as TabName);
       }
     });
   }, []);
 
-  /* Launch with <body> selected so the panels are never empty on arrival. */
+  /* Launch with <body> selected so the panels are never empty on arrival.
+     SVG documents have no body; their root <svg> plays the same role. */
   const didAutoSelect = useRef(false);
   useEffect(() => {
     if (didAutoSelect.current) return;
     didAutoSelect.current = true;
-    if (document.body) selectElement(document.body);
+    // Typed Element because on SVG documents the runtime documentElement is
+    // an SVGSVGElement, whatever lib.dom's HTML-centric type says.
+    const initial: Element | null = document.body ?? document.documentElement;
+    if (initial instanceof HTMLElement || initial instanceof SVGElement) {
+      selectElement(initial);
+    }
   }, [selectElement]);
 
   useEffect(() => {
@@ -1186,9 +1251,10 @@ function Inspector({ host }: { host: HTMLElement }) {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") setAboutOpen(false);
     };
-    window.addEventListener("keydown", close, true);
-    return () => window.removeEventListener("keydown", close, true);
-  }, [aboutOpen]);
+    // The card lives in the UI's own window; that is where its keys fire.
+    uiWindow.addEventListener("keydown", close, true);
+    return () => uiWindow.removeEventListener("keydown", close, true);
+  }, [aboutOpen, uiWindow]);
 
   useEffect(() => {
     if (!picking) return;
@@ -1196,7 +1262,7 @@ function Inspector({ host }: { host: HTMLElement }) {
     const highlight = document.createElement("div");
     highlight.id = HIGHLIGHT_ID;
     Object.assign(highlight.style, {
-      position: "fixed",
+      position: overlayPosition(),
       zIndex: "2147483646",
       pointerEvents: "none",
       background: themeTokens.devtools.highlightFill,
@@ -1204,11 +1270,15 @@ function Inspector({ host }: { host: HTMLElement }) {
       boxSizing: "border-box",
       transition: "all 40ms linear",
     });
-    document.documentElement.append(highlight);
+    getOverlayRoot().append(highlight);
 
-    const candidateFromEvent = (event: Event): HTMLElement | null => {
+    const candidateFromEvent = (event: Event): StylableElement | null => {
       const candidate = event.composedPath()[0];
-      if (!(candidate instanceof HTMLElement)) return null;
+      if (!(
+        candidate instanceof HTMLElement || candidate instanceof SVGElement
+      )) {
+        return null;
+      }
       if (candidate === host || host.contains(candidate)) return null;
       if (isInspectorNode(candidate)) return null;
       return candidate;
@@ -1243,13 +1313,36 @@ function Inspector({ host }: { host: HTMLElement }) {
     document.addEventListener("pointermove", move, true);
     document.addEventListener("click", choose, true);
     document.addEventListener("keydown", cancel, true);
+    // Escape must also work while focus sits inside the iframe host.
+    if (uiWindow !== window) uiWindow.addEventListener("keydown", cancel, true);
     return () => {
       highlight.remove();
       document.removeEventListener("pointermove", move, true);
       document.removeEventListener("click", choose, true);
       document.removeEventListener("keydown", cancel, true);
+      if (uiWindow !== window)
+        uiWindow.removeEventListener("keydown", cancel, true);
     };
-  }, [host, picking, selectElement, selectTab, themeTokens]);
+  }, [host, picking, selectElement, selectTab, themeTokens, uiWindow]);
+
+  /** Documents whose text selection a gesture must freeze: the page's, plus
+   *  the iframe's own when the UI lives in one. */
+  const selectionDocs = (): readonly Document[] =>
+    uiWindow === window ? [document] : [document, uiWindow.document];
+
+  /**
+   * Pins a gesture's pointer stream to the element it started on. Inside the
+   * iframe host this is what keeps a drag alive when the pointer crosses the
+   * iframe's edge — uncaptured, those events would fall to the page window,
+   * where nothing is listening.
+   */
+  function capturePointer(event: React.PointerEvent<HTMLElement>) {
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* Capture is an assist; the uiWindow listeners work without it. */
+    }
+  }
 
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
@@ -1257,7 +1350,8 @@ function Inspector({ host }: { host: HTMLElement }) {
     if (target.closest("button")) return;
 
     event.preventDefault();
-    const releaseSelection = suppressPageSelection();
+    capturePointer(event);
+    const releaseSelection = suppressPageSelection(selectionDocs());
     setDragging(true);
 
     // Dragging a docked window tears it off into floating mode, re-centered
@@ -1309,14 +1403,14 @@ function Inspector({ host }: { host: HTMLElement }) {
     const end = () => {
       setDragging(false);
       releaseSelection();
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", end);
-      window.removeEventListener("pointercancel", end);
+      uiWindow.removeEventListener("pointermove", move);
+      uiWindow.removeEventListener("pointerup", end);
+      uiWindow.removeEventListener("pointercancel", end);
     };
 
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end, { once: true });
-    window.addEventListener("pointercancel", end, { once: true });
+    uiWindow.addEventListener("pointermove", move);
+    uiWindow.addEventListener("pointerup", end, { once: true });
+    uiWindow.addEventListener("pointercancel", end, { once: true });
   }
 
   /**
@@ -1330,7 +1424,8 @@ function Inspector({ host }: { host: HTMLElement }) {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    const releaseSelection = suppressPageSelection();
+    capturePointer(event);
+    const releaseSelection = suppressPageSelection(selectionDocs());
     const start = { x: event.clientX, y: event.clientY, frame };
     const minWidth = Math.min(
       MIN_WIDTH,
@@ -1386,21 +1481,22 @@ function Inspector({ host }: { host: HTMLElement }) {
     };
     const end = () => {
       releaseSelection();
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", end);
-      window.removeEventListener("pointercancel", end);
+      uiWindow.removeEventListener("pointermove", move);
+      uiWindow.removeEventListener("pointerup", end);
+      uiWindow.removeEventListener("pointercancel", end);
     };
 
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end, { once: true });
-    window.addEventListener("pointercancel", end, { once: true });
+    uiWindow.addEventListener("pointermove", move);
+    uiWindow.addEventListener("pointerup", end, { once: true });
+    uiWindow.addEventListener("pointercancel", end, { once: true });
   }
 
   /** Drags the page-facing edge of a docked window to change the split. */
   function beginDockResize(event: React.PointerEvent<HTMLElement>) {
     if (event.button !== 0 || dock === "floating") return;
     event.preventDefault();
-    const releaseSelection = suppressPageSelection();
+    capturePointer(event);
+    const releaseSelection = suppressPageSelection(selectionDocs());
     const side = dock;
     const start = {
       x: event.clientX,
@@ -1438,14 +1534,14 @@ function Inspector({ host }: { host: HTMLElement }) {
     };
     const end = () => {
       releaseSelection();
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", end);
-      window.removeEventListener("pointercancel", end);
+      uiWindow.removeEventListener("pointermove", move);
+      uiWindow.removeEventListener("pointerup", end);
+      uiWindow.removeEventListener("pointercancel", end);
     };
 
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end, { once: true });
-    window.addEventListener("pointercancel", end, { once: true });
+    uiWindow.addEventListener("pointermove", move);
+    uiWindow.addEventListener("pointerup", end, { once: true });
+    uiWindow.addEventListener("pointercancel", end, { once: true });
   }
 
   function dockResizeWithKeyboard(event: React.KeyboardEvent<HTMLElement>) {
@@ -1517,21 +1613,23 @@ function Inspector({ host }: { host: HTMLElement }) {
     }));
   }
 
-  /** Roving focus across the tab strip, the way a tablist should behave. */
+  /** Roving focus across the tab strip, the way a tablist should behave.
+      Disabled tabs are skipped, never landed on. */
   function onTabKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    const index = TABS.indexOf(tab);
+    const enabled = TABS.filter((name) => TAB_AVAILABILITY[name]);
+    const index = enabled.indexOf(tab);
     let next = index;
 
-    if (event.key === "ArrowRight") next = (index + 1) % TABS.length;
+    if (event.key === "ArrowRight") next = (index + 1) % enabled.length;
     else if (event.key === "ArrowLeft")
-      next = (index - 1 + TABS.length) % TABS.length;
+      next = (index - 1 + enabled.length) % enabled.length;
     else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = TABS.length - 1;
+    else if (event.key === "End") next = enabled.length - 1;
     else return;
 
     event.preventDefault();
-    selectTab(TABS[next]);
-    tabRefs.current[next]?.focus();
+    selectTab(enabled[next]);
+    tabRefs.current[TABS.indexOf(enabled[next])]?.focus();
   }
 
   function applyStyle(property: string, value: string) {
@@ -1694,6 +1792,12 @@ function Inspector({ host }: { host: HTMLElement }) {
               aria-controls={`inspector-panel-${name}`}
               tabIndex={tab === name ? 0 : -1}
               $selected={tab === name}
+              disabled={!TAB_AVAILABILITY[name]}
+              title={
+                TAB_AVAILABILITY[name]
+                  ? undefined
+                  : "Not available on this page"
+              }
               onClick={() => selectTab(name)}
             >
               {name}
@@ -1907,7 +2011,13 @@ function Inspector({ host }: { host: HTMLElement }) {
  * never modify. So the theme object is resolved here and handed straight to
  * styled-components.
  */
-function InspectorRoot({ host }: { host: HTMLElement }) {
+function InspectorRoot({
+  host,
+  uiWindow,
+}: {
+  host: HTMLElement;
+  uiWindow: Window;
+}) {
   const [osPrefersDark, setOsPrefersDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
@@ -1946,14 +2056,20 @@ function InspectorRoot({ host }: { host: HTMLElement }) {
     schemeChoice !== null ? schemeChoice === "dark" : osPrefersDark;
   const activeTheme = resolveInspectorTheme(isDark, branded);
 
-  /* Native controls (selects, scrollbars) in the shadow root follow this. */
+  /* Native controls (selects, scrollbars) in the UI's DOM follow this. The
+     iframe host needs it on its own document root — color-scheme does not
+     cross the frame boundary from the iframe element's style. */
   useEffect(() => {
-    host.style.colorScheme = activeTheme.isDark ? "dark" : "light";
-  }, [host, activeTheme]);
+    const scheme = activeTheme.isDark ? "dark" : "light";
+    host.style.colorScheme = scheme;
+    if (uiWindow !== window) {
+      uiWindow.document.documentElement.style.colorScheme = scheme;
+    }
+  }, [host, uiWindow, activeTheme]);
 
   return (
     <ThemeProvider theme={activeTheme}>
-      <Inspector host={host} />
+      <Inspector host={host} uiWindow={uiWindow} />
     </ThemeProvider>
   );
 }
@@ -2011,6 +2127,140 @@ class InspectorErrorBoundary extends Component<
   }
 }
 
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+/**
+ * On an SVG document, the only place HTML content renders is inside a
+ * `<foreignObject>`. This builds (or reuses) one as a viewport-sized overlay
+ * layer on the root `<svg>`:
+ *
+ * - Its local coordinates are pinned to CSS pixels by applying the inverse of
+ *   the root's screen transform, re-synced on resize and scroll. That undoes
+ *   whatever viewBox/width scaling the drawing has, and — because `transform`
+ *   makes the layer a containing block — keeps the host's position: fixed
+ *   frame math meaning exactly what it means on an HTML page.
+ * - The root svg clips to its own viewport by default (UA `overflow: hidden`),
+ *   which on a small icon would clip the inspector to a few pixels; the root
+ *   is opened up while the layer exists.
+ *
+ * The layer takes no pointer events itself; only the inspector's own children
+ * opt back in, so the drawing stays clickable underneath.
+ */
+/** Set by ensureSvgOverlayLayer: re-writes the layer's transform so the SVG
+ *  renderer re-rasterizes it. See installRepaintNudge. */
+let nudgeOverlayRepaint: (() => void) | null = null;
+
+function ensureSvgOverlayLayer(svg: SVGSVGElement): Element {
+  const existing: Element | null = document.getElementById(FOREIGN_LAYER_ID);
+  const layer =
+    (existing as SVGForeignObjectElement | null) ??
+    document.createElementNS(SVG_NAMESPACE, "foreignObject");
+
+  if (!existing) {
+    layer.id = FOREIGN_LAYER_ID;
+    Object.assign(layer.style, {
+      overflow: "visible",
+      pointerEvents: "none",
+    });
+    svg.style.overflow = "visible";
+  }
+
+  // Alternates the (equivalent) serialization of the transform on every
+  // nudge, so the attribute always *changes* and forces a redraw.
+  let tick = false;
+  const place = () => {
+    layer.setAttribute("x", "0");
+    layer.setAttribute("y", "0");
+    layer.setAttribute("width", String(Math.max(1, window.innerWidth)));
+    layer.setAttribute("height", String(Math.max(1, window.innerHeight)));
+    const sep = tick ? ", " : " ";
+    // Set even when identity: the transform is also what makes the layer a
+    // containing block for the host's viewport-anchored frame.
+    let matrix = ["matrix(1", "0", "0", "1", "0", "0)"].join(sep);
+    try {
+      const ctm = svg.getScreenCTM();
+      if (ctm) {
+        const m = ctm.inverse();
+        matrix = `matrix(${[m.a, m.b, m.c, m.d, m.e, m.f].join(sep)})`;
+      }
+    } catch {
+      /* A degenerate (non-invertible) transform keeps the identity. */
+    }
+    layer.setAttribute("transform", matrix);
+  };
+  place();
+  nudgeOverlayRepaint = () => {
+    tick = !tick;
+    place();
+  };
+  // The layer lives as long as the page, like the host itself; the listeners
+  // are never torn down on purpose.
+  window.addEventListener("resize", place);
+  window.addEventListener("scroll", place, true);
+
+  if (!existing) svg.append(layer);
+  setOverlayRoot(layer);
+  return layer;
+}
+
+/**
+ * WebKit does not reliably repaint foreignObject content when only its HTML
+ * descendants change: React renders, but the pixels on screen stay stale
+ * until something else — a pinch-zoom, a tab switch — forces the SVG to
+ * re-rasterize (observed on Orion/iPad, where panels only appeared after
+ * zooming). Watching the inspector's shadow tree and re-writing the layer
+ * transform after every mutation batch and scroll, throttled to one per
+ * animation frame, makes the renderer redraw on its own.
+ *
+ * Two observers: the shadow tree (panel content) and the layer's light DOM
+ * (the host frame moving, highlight boxes tracking the pointer). The nudge's
+ * own writes land on the layer element itself and are filtered out, so it
+ * cannot feed itself.
+ */
+function installRepaintNudge(scope: Node): void {
+  if (!nudgeOverlayRepaint) return;
+  const layer = getOverlayRoot();
+
+  let scheduled = false;
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      nudgeOverlayRepaint?.();
+    });
+  };
+
+  const observed = {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  };
+  new MutationObserver(schedule).observe(scope, observed);
+  new MutationObserver((records) => {
+    if (records.every((record) => record.target === layer)) return;
+    schedule();
+  }).observe(layer, observed);
+  // Scrolling a panel repaints without mutating the DOM; capture sees every
+  // scroller inside the shadow tree.
+  scope.addEventListener("scroll", schedule, true);
+  schedule();
+}
+
+/**
+ * Where the host element can live and actually render: the documentElement on
+ * HTML pages, a foreignObject layer on SVG documents, nowhere on any other
+ * XML document — there HTML never renders, so mounting would tell the popup
+ * "running" while the user sees nothing.
+ */
+function renderSurface(): Element | null {
+  if (isHtmlDom) return document.documentElement;
+  const root = document.documentElement;
+  if (root instanceof SVGSVGElement) return ensureSvgOverlayLayer(root);
+  return null;
+}
+
 function bootstrap() {
   const existing = document.getElementById(HOST_ID);
   if (existing) {
@@ -2026,18 +2276,39 @@ function bootstrap() {
     existing.remove();
   }
 
-  const host = document.createElement("div");
+  // Leaving no host behind is what makes the popup report "did not start".
+  const surface = renderSurface();
+  if (!surface) return;
+
+  if (isHtmlDom) mountInShadow(surface);
+  else mountInFrame(surface);
+}
+
+function createHostElement(tag: "div" | "iframe"): HTMLElement {
+  const host = document.createElement(tag);
   host.id = HOST_ID;
   Object.assign(host.style, {
-    position: "fixed",
+    // Absolute inside the foreignObject layer: same geometry (the layer is a
+    // viewport-sized containing block), but off WebKit's buggy
+    // fixed-inside-foreignObject rendering path.
+    position: isHtmlDom ? "fixed" : "absolute",
     zIndex: "2147483647",
     display: "block",
     margin: "0",
     padding: "0",
     border: "0",
     background: "transparent",
+    // The SVG overlay layer disables pointer events on itself; the host (and
+    // the rest of the inspector chrome) opts back in.
+    pointerEvents: "auto",
   });
-  document.documentElement.append(host);
+  return host;
+}
+
+/** HTML documents: the UI renders in a shadow root on a plain div host. */
+function mountInShadow(surface: Element): void {
+  const host = createHostElement("div");
+  surface.append(host);
 
   const shadow = host.attachShadow({ mode: "open" });
   const styleTarget = document.createElement("div");
@@ -2045,12 +2316,74 @@ function bootstrap() {
   Object.assign(mount.style, { width: "100%", height: "100%" });
   shadow.append(styleTarget, mount);
 
+  renderInspector(host, styleTarget, mount, window);
+}
+
+/**
+ * Non-HTML documents: the UI renders inside an iframe. Rendering the React
+ * tree directly in the foreignObject put every paint at the mercy of the SVG
+ * engine's foreignObject invalidation, which WebKit gets wrong — panels
+ * rendered but the pixels stayed stale until a pinch-zoom forced a re-raster
+ * (Orion/iPad). An iframe is its own HTML document with its own standard
+ * rendering pipeline; the foreignObject only has to position one plain box.
+ * The window frame logic is untouched — the iframe IS the host whose
+ * left/top/width/height the inspector already drives.
+ */
+function mountInFrame(surface: Element): void {
+  const host = createHostElement("iframe") as HTMLIFrameElement;
+  surface.append(host);
+
+  // Same-origin about:blank, synchronously scriptable — or not at all, in
+  // which case no host is left behind and the popup reports the page as
+  // unsupported.
+  if (!host.contentDocument || !host.contentWindow) {
+    host.remove();
+    return;
+  }
+
+  // A written skeleton beats relying on the default about:blank tree, which
+  // some engines only materialize lazily.
+  host.contentDocument.open();
+  host.contentDocument.write(
+    "<!doctype html><html><head></head><body></body></html>",
+  );
+  host.contentDocument.close();
+
+  const doc = host.contentDocument;
+  const uiWindow = host.contentWindow;
+  if (!doc?.body || !uiWindow) {
+    host.remove();
+    return;
+  }
+
+  doc.documentElement.style.height = "100%";
+  Object.assign(doc.body.style, {
+    margin: "0",
+    width: "100%",
+    height: "100%",
+    overflow: "hidden",
+    background: "transparent",
+  });
+  const mount = doc.createElement("div");
+  Object.assign(mount.style, { width: "100%", height: "100%" });
+  doc.body.append(mount);
+
+  installRepaintNudge(doc);
+  renderInspector(host, doc.head, mount, uiWindow);
+}
+
+function renderInspector(
+  host: HTMLElement,
+  styleTarget: HTMLElement,
+  mount: HTMLElement,
+  uiWindow: Window,
+): void {
   const root = createRoot(mount);
 
   root.render(
     <StyleSheetManager target={styleTarget}>
       <InspectorErrorBoundary>
-        <InspectorRoot host={host} />
+        <InspectorRoot host={host} uiWindow={uiWindow} />
       </InspectorErrorBoundary>
     </StyleSheetManager>,
   );

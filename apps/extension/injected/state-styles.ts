@@ -175,7 +175,10 @@ function cloneForcedRules(
   for (const sheet of Array.from(document.styleSheets)) {
     if (sheet.disabled) continue;
     const owner = sheet.ownerNode;
-    if (owner instanceof HTMLStyleElement && owner.id === STATE_STYLE_ID) {
+    if (
+      (owner instanceof HTMLStyleElement || owner instanceof SVGStyleElement) &&
+      owner.id === STATE_STYLE_ID
+    ) {
       continue; // never clone the inspector's own output
     }
     let cssRules: CSSRuleList;

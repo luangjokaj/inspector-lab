@@ -12,7 +12,12 @@ import {
   StatusBar,
   devtoolsMono,
 } from "~injected/devtools.styled";
-import { HOST_ID, STATE_STYLE_ID, truncate } from "~injected/inspector-dom";
+import {
+  FOREIGN_LAYER_ID,
+  HOST_ID,
+  STATE_STYLE_ID,
+  truncate,
+} from "~injected/inspector-dom";
 import { describeSendFailure, sendRuntimeMessage } from "~lib/runtime-message";
 import {
   tokenizeLines,
@@ -266,6 +271,7 @@ function collectSources(): SourceFile[] {
 
   const clone = document.documentElement.cloneNode(true) as HTMLElement;
   clone.querySelector(`#${HOST_ID}`)?.remove();
+  clone.querySelector(`#${FOREIGN_LAYER_ID}`)?.remove();
   clone.querySelector(`#${STATE_STYLE_ID}`)?.remove();
 
   files.push({

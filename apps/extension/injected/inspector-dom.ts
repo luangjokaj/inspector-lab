@@ -6,7 +6,13 @@
  * inspector interpolates host content into markup.
  */
 
+import { FOREIGN_LAYER_ID } from "~injected/xml-compat";
+
 export const HOST_ID = "inspector-lab-extension-root";
+/** The `<foreignObject>` the inspector renders into on SVG documents, where
+ *  HTML children of the root `<svg>` would never render. Lives in xml-compat
+ *  (which must import nothing); re-exported here for the rest of the code. */
+export { FOREIGN_LAYER_ID };
 export const HIGHLIGHT_ID = "inspector-lab-element-highlight";
 export const HOVER_HIGHLIGHT_ID = "inspector-lab-hover-highlight";
 /** The fallback `<style>` tag of the forced-state engine (state-styles.ts). */
@@ -68,14 +74,64 @@ export function isVoidElement(element: Element): boolean {
   return VOID_ELEMENTS.has(element.tagName.toLowerCase());
 }
 
+const INSPECTOR_NODE_IDS: readonly string[] = [
+  HOST_ID,
+  FOREIGN_LAYER_ID,
+  HIGHLIGHT_ID,
+  HOVER_HIGHLIGHT_ID,
+  STATE_STYLE_ID,
+];
+
 /** The inspector must never show or select its own injected nodes. */
 export function isInspectorNode(node: Element): boolean {
-  return (
-    node.id === HOST_ID ||
-    node.id === HIGHLIGHT_ID ||
-    node.id === HOVER_HIGHLIGHT_ID ||
-    node.id === STATE_STYLE_ID
-  );
+  return INSPECTOR_NODE_IDS.includes(node.id);
+}
+
+/**
+ * The element's live markup, minus the inspector's own nodes — what "copy
+ * this element" should put on the clipboard. Serialized from a clone so the
+ * page DOM is never touched.
+ */
+export function serializeElement(element: Element): string {
+  const clone = element.cloneNode(true) as Element;
+  for (const id of INSPECTOR_NODE_IDS) {
+    clone.querySelector(`#${id}`)?.remove();
+  }
+  return clone.outerHTML;
+}
+
+/**
+ * An element whose inline `style` the inspector can read and edit. HTML and
+ * SVG elements both carry CSSStyleDeclaration; the DOM offers no shared base
+ * type between them.
+ */
+export type StylableElement = HTMLElement | SVGElement;
+
+let overlayParent: Element | null = null;
+
+/**
+ * Where the inspector's fixed-position chrome (the picker and hover
+ * highlights) is appended. document.documentElement in HTML documents; on SVG
+ * documents bootstrap() points this at the foreignObject layer, since HTML
+ * elements appended to the `<svg>` root are never rendered.
+ */
+export function setOverlayRoot(element: Element): void {
+  overlayParent = element;
+}
+
+export function getOverlayRoot(): Element {
+  return overlayParent ?? document.documentElement;
+}
+
+/**
+ * The `position` for viewport-anchored overlay chrome. Fixed on HTML
+ * documents; inside the foreignObject layer, absolute — the geometry is
+ * identical (the layer is a viewport-sized containing block), but WebKit's
+ * fixed-inside-foreignObject rendering is buggy and absolute stays off that
+ * path.
+ */
+export function overlayPosition(): "fixed" | "absolute" {
+  return overlayParent ? "absolute" : "fixed";
 }
 
 let hoverBox: HTMLDivElement | null = null;
@@ -104,13 +160,13 @@ export function highlightElement(
     hoverBox = document.createElement("div");
     hoverBox.id = HOVER_HIGHLIGHT_ID;
     Object.assign(hoverBox.style, {
-      position: "fixed",
+      position: overlayPosition(),
       zIndex: "2147483646",
       pointerEvents: "none",
       boxSizing: "border-box",
       transition: "all 40ms linear",
     });
-    document.documentElement.append(hoverBox);
+    getOverlayRoot().append(hoverBox);
   }
 
   const rect = element.getBoundingClientRect();
@@ -283,7 +339,9 @@ export function matchedCssRules(element: Element): {
   let styleTagIndex = -1;
   for (const sheet of Array.from(document.styleSheets)) {
     const owner = sheet.ownerNode;
-    const isStyleTag = owner instanceof HTMLStyleElement;
+    // SVG documents carry SVGStyleElement tags; the Sources panel lists both.
+    const isStyleTag =
+      owner instanceof HTMLStyleElement || owner instanceof SVGStyleElement;
     if (isStyleTag) {
       if (owner.id === STATE_STYLE_ID) continue; // the inspector's own sheet
       styleTagIndex += 1;
@@ -307,7 +365,7 @@ export function matchedCssRules(element: Element): {
   return { rules: rules.reverse(), inaccessible };
 }
 
-export function snapshotElement(element: HTMLElement): ElementSnapshot {
+export function snapshotElement(element: StylableElement): ElementSnapshot {
   const computed = window.getComputedStyle(element);
   const rect = element.getBoundingClientRect();
 

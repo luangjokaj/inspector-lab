@@ -31,13 +31,16 @@ import {
 import {
   ancestorChain,
   describeElement,
+  getOverlayRoot,
   inlineText,
   isInspectorNode,
   isVoidElement,
+  serializeElement,
   truncate,
   visibleChildren,
   type ElementSnapshot,
   type MatchedRule,
+  type StylableElement,
 } from "~injected/inspector-dom";
 import {
   PSEUDO_STATES,
@@ -48,6 +51,44 @@ import {
 
 /** DOM search stops collecting past this point to keep huge pages snappy. */
 const MAX_SEARCH_MATCHES = 500;
+
+/** How long the copy button wears the checkmark before turning back. */
+const COPY_FEEDBACK_MS = 1500;
+
+/**
+ * Clipboard write with the classic textarea fallback: the async clipboard API
+ * needs a secure context, which an inspector meant for any page (plain http,
+ * file:) cannot assume. The textarea goes to the overlay root, the one place
+ * guaranteed to render on every supported document.
+ */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    /* Fall through to execCommand. */
+  }
+
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    Object.assign(area.style, {
+      position: "fixed",
+      top: "0",
+      left: "0",
+      opacity: "0",
+      pointerEvents: "none",
+    });
+    getOverlayRoot().append(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    return copied;
+  } catch {
+    return false;
+  }
+}
 
 /** Attributes past this point are elided, as DevTools does on noisy nodes. */
 const MAX_ATTRIBUTE_LENGTH = 60;
@@ -153,6 +194,28 @@ const Twisty = styled.span<{ $expanded: boolean; $visible: boolean }>`
 const RowContent = styled.span`
   flex: 0 0 auto;
   padding-right: 8px;
+`;
+
+/**
+ * The copy-element action on the selected element's opening line — DevTools'
+ * "Copy outerHTML", one hover away instead of buried in a context menu. Shares
+ * the Styles pane's row-action styling (the declaration X): revealed by
+ * hovering the row, by focus, and unconditionally where there is no hover.
+ * Sticky, so it holds the pane's right edge while the tree scrolls sideways.
+ */
+const RowActions = styled.span`
+  position: sticky;
+  right: 4px;
+  display: inline-flex;
+  align-self: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+  ${rowActionButton(15)};
+
+  ${TreeRow}:hover & button,
+  ${TreeRow}:focus-within & button {
+    ${revealed};
+  }
 `;
 
 const TagName = styled.span`
@@ -1298,10 +1361,10 @@ function AuthoredRuleBlock({
 /* ----------------------------------------------------------------- panel */
 
 export type ElementsPanelProps = {
-  root: HTMLElement;
-  selectedElement: HTMLElement | null;
+  root: Element;
+  selectedElement: StylableElement | null;
   snapshot: ElementSnapshot | null;
-  onSelectElement: (element: HTMLElement) => void;
+  onSelectElement: (element: StylableElement) => void;
   /** Paints or clears the page-side highlight while tree rows are hovered. */
   onHoverElement: (element: Element | null) => void;
   onApplyStyle: (
@@ -1375,8 +1438,30 @@ export function ElementsPanel({
     error: boolean;
   } | null>(null);
   const [treeEdit, setTreeEdit] = useState<TreeEdit | null>(null);
+  /** True while the copy button wears its "done" checkmark. */
+  const [copied, setCopied] = useState(false);
 
   const selectedRowRef = useRef<HTMLDivElement | null>(null);
+  const copyTimer = useRef<number | null>(null);
+
+  /* A new selection gets a fresh copy button, and no timer outlives us. */
+  useEffect(() => {
+    setCopied(false);
+    return () => {
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    };
+  }, [selectedElement]);
+
+  const copySelectedElement = async () => {
+    if (!selectedElement) return;
+    if (!(await copyText(serializeElement(selectedElement)))) return;
+    setCopied(true);
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(
+      () => setCopied(false),
+      COPY_FEEDBACK_MS,
+    );
+  };
 
   /* Reveal a picked element: expand every ancestor, then scroll to it. */
   useEffect(() => {
@@ -1426,7 +1511,9 @@ export function ElementsPanel({
   };
 
   const selectRow = (element: Element) => {
-    if (element instanceof HTMLElement) onSelectElement(element);
+    if (element instanceof HTMLElement || element instanceof SVGElement) {
+      onSelectElement(element);
+    }
   };
 
   /** Arrow-key navigation over the visible rows, as in the real Elements tree. */
@@ -2039,6 +2126,20 @@ export function ElementsPanel({
                       </>
                     )}
                   </RowContent>
+                  {isSelected && (
+                    <RowActions>
+                      <IconButton
+                        aria-label={`Copy outerHTML of ${describeElement(row.element)}`}
+                        title="Copy element"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void copySelectedElement();
+                        }}
+                      >
+                        <Icon name={copied ? "Check" : "Copy"} size={11} />
+                      </IconButton>
+                    </RowActions>
+                  )}
                 </TreeRow>
               );
             })}
