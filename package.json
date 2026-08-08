@@ -12,6 +12,7 @@
     "format:check": "prettier --check ."
   },
   "devDependencies": {
+    "@parcel/transformer-inline-string": "2.9.3",
     "@types/node": "^26",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2"

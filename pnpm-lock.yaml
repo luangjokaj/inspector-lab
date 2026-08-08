@@ -12,6 +12,9 @@ importers:
 
   .:
     devDependencies:
+      '@parcel/transformer-inline-string':
+        specifier: 2.9.3
+        version: 2.9.3(@parcel/core@2.9.3)
       '@types/node':
         specifier: ^26
         version: 26.1.2
