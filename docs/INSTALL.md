@@ -40,8 +40,10 @@ pnpm package
 ## 2. Orion on iPadOS and iOS
 
 [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html)
-is free on the App Store and is the only iPad browser that runs Chrome
-extensions. Install Orion first if you have not already.
+is [free for iPhone and iPad](https://orionbrowser.com/) and is the only iPad
+browser that runs Chrome extensions. Install Orion first if you have not
+already — [the App Store link](https://apps.apple.com/app/id1484498200) opens
+Orion directly when tapped on the iPad.
 
 ### Step 1 — Get the folder onto the iPad
 

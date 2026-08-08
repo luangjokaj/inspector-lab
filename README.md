@@ -44,7 +44,7 @@ pnpm build
 
 Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `apps/extension/build/chrome-mv3-prod`.
 
-Works in desktop Chrome and Chromium-based browsers, and in [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html) on iOS and iPadOS.
+Works in desktop Chrome and Chromium-based browsers, and in [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html) on iOS and iPadOS, a [free download for iPhone and iPad](https://orionbrowser.com/).
 
 **On an iPad or iPhone**, Orion installs the extension from a folder you first copy into `On My iPad → Orion → Extensions`, then pick with **⋯ → Extensions → + → Install from File**. Run `pnpm package` for a 1.2 MB zip to move across, and follow **[the step-by-step install guide →](docs/INSTALL.md)**.
 

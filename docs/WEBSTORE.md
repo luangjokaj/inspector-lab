@@ -121,6 +121,7 @@ Console, Sources, and Storage panels rest on APIs that are far likelier to be
 present. The store copy is deliberately hedged ("a strong subset rather than a
 promise of every panel") until that testing is done.
 Docs: https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html
+Orion: https://orionbrowser.com/
 
 **Microsoft Edge Canary — Android. Plausible second channel, needs a second
 store submission.** Edge Canary absorbed Kiwi Browser's extension engine and is
