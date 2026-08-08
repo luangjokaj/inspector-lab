@@ -31,11 +31,15 @@ const PopupShell = styled.main`
   padding: ${({ theme }) => theme.spacing.padding.xs};
   box-sizing: border-box;
   color: ${({ theme }) => theme.colors.dark};
+  /* A vertical band that peaks halfway down and fades to nothing at both ends,
+     so the top and bottom edges are the bare surface — pure white in light
+     mode, near-black in dark — and only the middle carries the brand tint. */
   background:
     linear-gradient(
-      135deg,
-      ${({ theme }) => alpha(theme.colors.primary, 13)},
-      transparent 44%
+      180deg,
+      transparent,
+      ${({ theme }) => alpha(theme.colors.primary, 13)} 50%,
+      transparent
     ),
     ${({ theme }) => theme.colors.light};
 `;
