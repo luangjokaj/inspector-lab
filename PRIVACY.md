@@ -1,15 +1,20 @@
 # Privacy Policy
 
 **Inspector Lab - DevTools**
-Effective 7 August 2026
+Effective 8 August 2026
 
 ## The short version
 
 Inspector Lab - DevTools collects nothing, transmits nothing, and has no
-servers. There is no analytics, no telemetry, no crash reporting, no
-advertising, and no account to create. Everything the inspector shows you is
-read from the page in front of you, rendered on your device, and forgotten when
-you close it.
+servers. There is no analytics, no telemetry, no advertising, and no account to
+create. Everything the inspector shows you is read from the page in front of
+you, rendered on your device, and forgotten when you close it.
+
+The one thing resembling crash reporting is a diagnostics log that never
+leaves your device: the extension's own errors (never the page's) and sessions
+that ended without a clean close are kept in a small local ring buffer, shown
+only in the popup's Diagnostics section, where you can also clear it. Nothing
+in it is transmitted, to the developer or anyone else.
 
 This is a deliberate design constraint, not a current state of affairs that
 might quietly change. The extension is open source under the MIT license, so
@@ -42,12 +47,14 @@ plainly.
 
 Almost nothing, and nothing that describes you:
 
-| What                                                          | Where                      | Cleared when                              |
-| ------------------------------------------------------------- | -------------------------- | ----------------------------------------- |
-| Theme choice (light/dark/system) and the custom-theme toggle  | `chrome.storage.local`     | you uninstall the extension               |
-| Which tabs have an inspector open, and on which origin        | `chrome.storage.session`   | the browser session ends                  |
-| The panel you last used on a given site                       | `chrome.storage.session`   | the browser session ends                  |
-| Headers-only log of requests for a tab, for the Network panel | memory only, never on disk | the tab closes, or the extension restarts |
+| What                                                                             | Where                      | Cleared when                                                         |
+| -------------------------------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------- |
+| Theme choice (light/dark/system) and the custom-theme toggle                     | `chrome.storage.local`     | you uninstall the extension                                          |
+| Which tabs have an inspector open, and on which origin                           | `chrome.storage.session`   | the browser session ends                                             |
+| The panel you last used on a given site                                          | `chrome.storage.session`   | the browser session ends                                             |
+| Headers-only log of requests for a tab, for the Network panel                    | memory only, never on disk | the tab closes, or the extension restarts                            |
+| Open-session records (tab id and origin), so unclean ends can be detected        | `chrome.storage.local`     | the session closes cleanly, or the record is swept at the next start |
+| Diagnostics log: extension errors and unclean session ends (origin + timestamps) | `chrome.storage.local`     | you press Clear in the popup; oldest entries rotate out past 100     |
 
 Everything else — the DOM, console output, request and response bodies, cookie
 values, storage values, source file contents — exists only for as long as the
@@ -73,8 +80,8 @@ you click them, like any other link.
   it attached across reloads on sites you granted, and runs the console
   expressions you type in the page's context. All injected code ships inside the
   extension package; nothing is downloaded and run.
-- **storage** — saves the preferences and session state listed in the table
-  above. Nothing else.
+- **storage** — saves the preferences, session state, and local-only
+  diagnostics listed in the table above. Nothing else.
 - **cookies** — powers the Cookies panel. Only usable on sites where you
   explicitly granted access, and only to display and edit those cookies in the
   panel.

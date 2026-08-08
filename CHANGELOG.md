@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Diagnostics log, viewable from the popup.** Uncaught extension errors from
+  the background worker, the popup, and the injected inspector are recorded in
+  a local ring buffer (last 100 entries, `chrome.storage.local`, never
+  transmitted anywhere), with copy and clear buttons in a new popup section —
+  a readable crash trail on devices with no console, like Orion on iPad.
+- **Session tombstones.** Inspector sessions that end without a clean close
+  (browser exit, page crash, or an OS memory kill) are detected at the next
+  service-worker start and logged to the diagnostics log with their origin.
 - **Standalone SVG document support.** The inspector now launches on SVG files
   opened directly in a tab (previously it failed with "injected but did not
   start"). On non-HTML documents the UI mounts inside a viewport-aligned

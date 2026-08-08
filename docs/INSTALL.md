@@ -189,6 +189,22 @@ internal URLs are protected and out of reach for any extension.
 **The Cookies panel is empty.** Site access was not granted. Relaunch from the
 popup and allow it when asked.
 
+**Orion warned about compatibility at install.** Orion compares the APIs an
+extension uses against the ones its beta iOS surface implements and warns
+about the gap. The warning is informational and expected here — the inspector
+deliberately uses APIs Orion does not have yet (like `chrome.webRequest`'s
+completion events) and degrades visibly, per panel, when one is missing.
+Moving permissions around does not remove it (verified on-device), so install
+past it: what each panel can and cannot do on iOS is listed above.
+
+**It crashed and there are no logs to check.** There are now: open the toolbar
+popup and tap **Diagnostics**. Extension errors and sessions that ended without
+a clean close (a browser exit, page crash, or iOS memory kill) are recorded in
+a local log that survives restarts, with a Copy button for pasting into an
+issue. If the inspector died mid-session, relaunching it after a browser
+restart is normal — that is iOS reclaiming memory, and the log entry names the
+site it happened on.
+
 **It opened, flashed on the page, and disappeared.** That was a bug in earlier
 builds: a missing `chrome.storage.session` namespace took the background service
 worker down at startup, and an unguarded extension API call inside a React

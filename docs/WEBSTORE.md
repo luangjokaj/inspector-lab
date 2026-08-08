@@ -195,14 +195,17 @@ Keep it that way — do not let it turn into a pitch to leave Chrome.
 
 **storage**
 
-> chrome.storage.local stores the user's UI settings only: theme choice
-> (light/dark/system) and the classic-DevTools-style toggle, so the popup and
-> the injected inspector share them. chrome.storage.session keeps two pieces of
-> per-session state: which tabs have an inspector open (tab id to origin), so it
-> can be reattached after a reload, and the panel last used on a given origin.
-> The Network panel's headers-only request log is held in memory in the service
-> worker and never written to storage. No browsing history or page content is
-> persisted.
+> chrome.storage.local stores the user's UI settings (theme choice and the
+> classic-DevTools-style toggle, shared between the popup and the injected
+> inspector) and a local-only diagnostics log: the extension's own uncaught
+> errors and records of inspector sessions that ended without a clean close
+> (tab id, origin, timestamps), capped at 100 entries, shown only in the
+> popup's Diagnostics section, clearable there, and never transmitted.
+> chrome.storage.session keeps two pieces of per-session state: which tabs
+> have an inspector open (tab id to origin), so it can be reattached after a
+> reload, and the panel last used on a given origin. The Network panel's
+> headers-only request log is held in memory in the service worker and never
+> written to storage. No browsing history or page content is persisted.
 
 **cookies**
 
@@ -219,8 +222,8 @@ Keep it that way — do not let it turn into a pitch to leave Chrome.
 > method, URL, status, timing, and request/response headers, exactly what the
 > Network panel displays. Observation is passive (no blocking, no
 > modification), scoped to tabs where the inspector is open, and the log lives
-> in session storage only, cleared when the tab closes or the inspector is
-> dismissed.
+> in service worker memory only, cleared when the tab closes or the inspector
+> is dismissed.
 
 **Optional host permissions (`http://*/*`, `https://*/*`)**
 
@@ -251,12 +254,14 @@ Keep it that way — do not let it turn into a pitch to leave Chrome.
 Check **none** of the data-type boxes. The extension collects no data:
 
 - No data leaves the browser. There is no backend, no analytics, no telemetry,
-  no error reporting, and no network calls except the user-initiated,
-  display-only source-file fetches described above.
+  no error reporting to any server, and no network calls except the
+  user-initiated, display-only source-file fetches described above.
 - Everything the inspector shows (DOM, console output, network headers and
   bodies, cookies, storage) is read locally and rendered in-page only.
-- The only persisted values are UI preferences (theme toggles) in
-  chrome.storage.local and ephemeral per-tab state in chrome.storage.session.
+- The only persisted values are UI preferences (theme toggles) and a
+  local-only, user-clearable diagnostics log (the extension's own errors and
+  unclean session ends) in chrome.storage.local, and ephemeral per-tab state
+  in chrome.storage.session.
 
 Certifications at the bottom of the tab, all three apply, check them:
 

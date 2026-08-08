@@ -76,6 +76,7 @@ Inspector Lab - DevTools is a movable, resizable devtools window that lives dire
 ## Privacy and security posture
 
 - No standing host permissions: page access rides on `activeTab`, cookie access is granted per site (or explicitly for all sites), and both are requested only when you act.
+- **A diagnostics log you can actually reach on a tablet**: the extension's own errors and sessions that ended without a clean close (a browser exit, page crash, or memory kill) are recorded in a local ring buffer and shown in the popup's Diagnostics section, with copy and clear buttons. Local-only, capped at 100 entries, never transmitted — it exists because an iPad has no console to check after a crash.
 - The UI lives in a Shadow DOM and never modifies the host page's storage, classes, or theme state.
 - Every cookie write round-trips through the background service worker, which independently re-validates the sender, payload shape, and permission scope — the panel's checks are UX, not the security boundary.
 - Console capture and evaluation run with the same authority page scripts already have; no extension APIs leak into the page.
