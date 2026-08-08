@@ -7,6 +7,7 @@ import {
   GET_NETWORK_DETAILS_MESSAGE,
   INTERCEPT_CONSOLE_MESSAGE,
   INTERCEPT_NETWORK_MESSAGE,
+  PING_MESSAGE,
   REQUEST_COOKIE_ACCESS_MESSAGE,
   SET_COOKIE_MESSAGE,
   TRACK_INSPECTOR_MESSAGE,
@@ -31,6 +32,8 @@ import {
   type InterceptConsoleResponse,
   type InterceptNetworkRequest,
   type InterceptNetworkResponse,
+  type PingRequest,
+  type PingResponse,
   type RequestCookieAccessRequest,
   type RequestCookieAccessResponse,
   type SetCookieRequest,
@@ -40,9 +43,26 @@ import {
   type WebRequestEntry,
 } from "~lib/messages";
 import { readBodyCapped } from "~lib/source-fetch";
+import { evaluateInPage } from "~injected/page-eval";
 import inspectorBundleUrl from "url:./injected/inspector-entry.tsx";
 import consolePrehookUrl from "url:./injected/console-prehook.ts";
 import networkPrehookUrl from "url:./injected/network-prehook.ts";
+
+/**
+ * Registered before anything else in this file runs.
+ *
+ * Two hazards below already have their own guards — chrome.storage.session and
+ * chrome.webRequest, both absent or partial on Orion for iOS — because a throw
+ * at module scope stops this file, and a file that stops before reaching its
+ * onMessage listener leaves every panel talking to nothing. Registering the
+ * listener first turns that from a fatal, invisible failure into a per-message
+ * one: the handler still answers, and anything it needs that failed to
+ * initialize surfaces as that message's own error.
+ *
+ * `handleMessage` is a function declaration precisely so it can be referenced
+ * here, above its definition.
+ */
+chrome.runtime.onMessage.addListener(handleMessage);
 
 const PREVIEW_LIMIT = 2000;
 /** Matches the Sources panel's own per-file display cap. */
@@ -206,25 +226,26 @@ function headerPairsFrom(
 }
 
 /**
- * Registers one webRequest listener, tolerating browsers that ship the
- * namespace without the event. Orion on iOS exposes chrome.webRequest but
- * supports neither onCompleted nor onErrorOccurred, and reading `.addListener`
- * off an absent event throws at module scope — which would stop this file
- * before the runtime.onMessage handler below is registered, silencing every
- * panel instead of just the Network one. Also covers an extraInfoSpec the
- * browser rejects.
+ * Registers one event listener, tolerating browsers that ship a namespace
+ * without the event on it. Orion on iOS exposes chrome.webRequest but supports
+ * neither onCompleted nor onErrorOccurred, and reading `.addListener` off an
+ * absent event throws at module scope. That no longer silences the whole file
+ * (onMessage is registered on its first line), but an unguarded throw would
+ * still skip every registration after it, so each one gets its own guard. Also
+ * covers an extraInfoSpec the browser rejects.
  */
-function registerWebRequestListener(register: () => void): void {
+function registerListener(register: () => void): void {
   try {
     register();
   } catch {
-    /* Unsupported here: the Network panel falls back to the page's own
-       fetch/XHR hook, which needs no webRequest at all. */
+    /* Unsupported here. Each caller degrades on its own terms: the Network
+       panel falls back to the page's fetch/XHR hook, and the tab listeners
+       cost reload persistence, not the inspector itself. */
   }
 }
 
 if (chrome.webRequest) {
-  registerWebRequestListener(() => {
+  registerListener(() => {
     chrome.webRequest.onSendHeaders.addListener(
       (details) => {
         if (!openTabIds.has(details.tabId)) return;
@@ -252,7 +273,7 @@ if (chrome.webRequest) {
     );
   });
 
-  registerWebRequestListener(() => {
+  registerListener(() => {
     chrome.webRequest.onCompleted.addListener(
       (details) => {
         const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
@@ -267,7 +288,7 @@ if (chrome.webRequest) {
     );
   });
 
-  registerWebRequestListener(() => {
+  registerListener(() => {
     chrome.webRequest.onErrorOccurred.addListener(
       (details) => {
         const entry = webRequestLog.get(details.tabId)?.get(details.requestId);
@@ -298,139 +319,39 @@ async function unregisterPrehookIfUnused(origin: string): Promise<void> {
  * per-site host grant, or activeTab for same-origin reloads; when both are
  * unavailable executeScript rejects and the inspector simply stays closed.
  */
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status !== "complete") return;
-  void (async () => {
-    const key = openTabKey(tabId);
-    const stored = await sessionStore.get(key);
-    if (!stored[key]) return;
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: [INSPECTOR_BUNDLE],
-      });
-    } catch {
-      /* Grant expired (cross-origin navigation without a host grant). */
-    }
-  })();
+registerListener(() => {
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status !== "complete") return;
+    void (async () => {
+      const key = openTabKey(tabId);
+      const stored = await sessionStore.get(key);
+      if (!stored[key]) return;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: [INSPECTOR_BUNDLE],
+        });
+      } catch {
+        /* Grant expired (cross-origin navigation without a host grant). */
+      }
+    })();
+  });
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  openTabIds.delete(tabId);
-  webRequestLog.delete(tabId);
-  void (async () => {
-    const key = openTabKey(tabId);
-    const stored = await sessionStore.get(key);
-    const origin = stored[key] as string | undefined;
-    if (origin === undefined) return;
-    await sessionStore.remove(key);
-    await unregisterPrehookIfUnused(origin).catch(() => undefined);
-  })();
+registerListener(() => {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    openTabIds.delete(tabId);
+    webRequestLog.delete(tabId);
+    void (async () => {
+      const key = openTabKey(tabId);
+      const stored = await sessionStore.get(key);
+      const origin = stored[key] as string | undefined;
+      if (origin === undefined) return;
+      await sessionStore.remove(key);
+      await unregisterPrehookIfUnused(origin).catch(() => undefined);
+    })();
+  });
 });
-
-/**
- * Runs inside the page's MAIN world via chrome.scripting, so it must be fully
- * self-contained: no imports, no closure over module scope. It evaluates with
- * the same authority page scripts already have — no extension APIs leak in —
- * and returns a plain-text preview, never a live value.
- */
-function evaluateInPage(expression: string, limit: number): EvaluateResponse {
-  const describe = (value: unknown, depth: number): string => {
-    if (value === null) return "null";
-    if (value === undefined) return "undefined";
-
-    const type = typeof value;
-    if (type === "string") return JSON.stringify(value);
-    if (type === "number" || type === "boolean" || type === "bigint") {
-      return String(value);
-    }
-    if (type === "symbol") return String(value);
-    if (type === "function") {
-      const name = (value as { name?: string }).name;
-      return `ƒ ${name || "anonymous"}()`;
-    }
-    if (value instanceof Error) {
-      return `${value.name}: ${value.message}`;
-    }
-    if (value instanceof Element) {
-      const id = value.id ? `#${value.id}` : "";
-      const cls =
-        typeof value.className === "string" && value.className
-          ? `.${value.className.trim().split(/\s+/).join(".")}`
-          : "";
-      return `<${value.tagName.toLowerCase()}${id}${cls}>`;
-    }
-    if (typeof (value as { then?: unknown }).then === "function") {
-      return "Promise (value not awaited)";
-    }
-    if (depth >= 2) return Array.isArray(value) ? "Array(…)" : "{…}";
-
-    if (Array.isArray(value)) {
-      const items = value
-        .slice(0, 10)
-        .map((item) => describe(item, depth + 1))
-        .join(", ");
-      const more = value.length > 10 ? `, … ${value.length - 10} more` : "";
-      return `(${value.length}) [${items}${more}]`;
-    }
-
-    try {
-      const entries = Object.entries(value as Record<string, unknown>)
-        .slice(0, 10)
-        .map(([key, item]) => `${key}: ${describe(item, depth + 1)}`);
-      const tag =
-        (value as object).constructor?.name &&
-        (value as object).constructor.name !== "Object"
-          ? `${(value as object).constructor.name} `
-          : "";
-      return `${tag}{${entries.join(", ")}}`;
-    } catch {
-      return Object.prototype.toString.call(value);
-    }
-  };
-
-  try {
-    // Indirect eval: global scope, same privileges as any page script.
-    const result = (0, eval)(expression);
-    const preview = describe(result, 0);
-    // Primitive results carry a tone so the panel can color them by type,
-    // the way DevTools renders evaluation results.
-    const tone =
-      result === null || result === undefined
-        ? ("nullish" as const)
-        : typeof result === "number" || typeof result === "bigint"
-          ? ("number" as const)
-          : typeof result === "boolean"
-            ? ("boolean" as const)
-            : typeof result === "string"
-              ? ("string" as const)
-              : undefined;
-    return {
-      ok: true,
-      preview: preview.length > limit ? `${preview.slice(0, limit)}…` : preview,
-      ...(tone ? { tone } : {}),
-    };
-  } catch (error) {
-    if (
-      error instanceof EvalError ||
-      (error instanceof Error &&
-        /unsafe-eval|Content Security Policy/i.test(error.message))
-    ) {
-      return {
-        ok: false,
-        preview:
-          "This site's Content Security Policy blocks eval. Browser DevTools can bypass CSP; an in-page inspector cannot.",
-      };
-    }
-    return {
-      ok: false,
-      preview:
-        error instanceof Error
-          ? `Uncaught ${error.name}: ${error.message}`
-          : `Uncaught ${String(error)}`,
-    };
-  }
-}
 
 /**
  * Runs in the page's MAIN world. Points the already-installed console hook
@@ -595,644 +516,654 @@ function validateCookieDraft(draft: CookieDraft): string | null {
   return null;
 }
 
-chrome.runtime.onMessage.addListener(
-  (message: unknown, sender, sendResponse) => {
-    const request = message as
-      | EvaluateRequest
-      | InterceptConsoleRequest
-      | GetCookiesRequest
-      | DeleteCookieRequest
-      | SetCookieRequest
-      | ClearSiteCookiesRequest
-      | TrackInspectorRequest
-      | FetchSourceRequest
-      | InterceptNetworkRequest
-      | GetNetworkDetailsRequest
-      | RequestCookieAccessRequest;
-    if (
-      request?.type !== EVALUATE_MESSAGE &&
-      request?.type !== INTERCEPT_CONSOLE_MESSAGE &&
-      request?.type !== INTERCEPT_NETWORK_MESSAGE &&
-      request?.type !== GET_NETWORK_DETAILS_MESSAGE &&
-      request?.type !== GET_COOKIES_MESSAGE &&
-      request?.type !== DELETE_COOKIE_MESSAGE &&
-      request?.type !== SET_COOKIE_MESSAGE &&
-      request?.type !== CLEAR_SITE_COOKIES_MESSAGE &&
-      request?.type !== TRACK_INSPECTOR_MESSAGE &&
-      request?.type !== FETCH_SOURCE_MESSAGE &&
-      request?.type !== REQUEST_COOKIE_ACCESS_MESSAGE
-    ) {
+function handleMessage(
+  message: unknown,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: unknown) => void,
+): boolean | undefined {
+  const request = message as
+    | EvaluateRequest
+    | InterceptConsoleRequest
+    | GetCookiesRequest
+    | DeleteCookieRequest
+    | SetCookieRequest
+    | ClearSiteCookiesRequest
+    | TrackInspectorRequest
+    | FetchSourceRequest
+    | InterceptNetworkRequest
+    | GetNetworkDetailsRequest
+    | RequestCookieAccessRequest
+    | PingRequest;
+
+  // Answered before the sender check and without holding the reply channel
+  // open: this is the probe the inspector uses to tell "the background never
+  // ran" apart from "the background ran but its async reply was dropped",
+  // which are indistinguishable from a tablet otherwise.
+  if (request?.type === PING_MESSAGE) {
+    sendResponse({ ok: true } satisfies PingResponse);
+    return;
+  }
+
+  if (
+    request?.type !== EVALUATE_MESSAGE &&
+    request?.type !== INTERCEPT_CONSOLE_MESSAGE &&
+    request?.type !== INTERCEPT_NETWORK_MESSAGE &&
+    request?.type !== GET_NETWORK_DETAILS_MESSAGE &&
+    request?.type !== GET_COOKIES_MESSAGE &&
+    request?.type !== DELETE_COOKIE_MESSAGE &&
+    request?.type !== SET_COOKIE_MESSAGE &&
+    request?.type !== CLEAR_SITE_COOKIES_MESSAGE &&
+    request?.type !== TRACK_INSPECTOR_MESSAGE &&
+    request?.type !== FETCH_SOURCE_MESSAGE &&
+    request?.type !== REQUEST_COOKIE_ACCESS_MESSAGE
+  ) {
+    return;
+  }
+
+  // Only act on the tab the inspector itself is running in — the tab id
+  // comes from the sender, never from the message payload.
+  const tabId = sender.tab?.id;
+  if (sender.id !== chrome.runtime.id || tabId === undefined) {
+    if (request.type === EVALUATE_MESSAGE) {
+      sendResponse({
+        ok: false,
+        preview: "Evaluation request rejected: unknown sender.",
+      } satisfies EvaluateResponse);
+    } else if (request.type === GET_COOKIES_MESSAGE) {
+      sendResponse({
+        ok: false,
+        cookies: [],
+        error: "Request rejected: unknown sender.",
+      } satisfies GetCookiesResponse);
+    } else if (request.type === GET_NETWORK_DETAILS_MESSAGE) {
+      sendResponse({
+        ok: false,
+        entries: [],
+      } satisfies GetNetworkDetailsResponse);
+    } else {
+      sendResponse({ ok: false } satisfies
+        | InterceptConsoleResponse
+        | DeleteCookieResponse
+        | SetCookieResponse
+        | ClearSiteCookiesResponse
+        | TrackInspectorResponse
+        | FetchSourceResponse
+        | InterceptNetworkResponse
+        | RequestCookieAccessResponse);
+    }
+    return;
+  }
+
+  if (request.type === GET_COOKIES_MESSAGE) {
+    const tabUrl = sender.tab?.url;
+    if (!tabUrl || !/^https?:/.test(tabUrl)) {
+      sendResponse({
+        ok: false,
+        cookies: [],
+        error: "Cookies are only readable on http(s) pages.",
+      } satisfies GetCookiesResponse);
       return;
     }
 
-    // Only act on the tab the inspector itself is running in — the tab id
-    // comes from the sender, never from the message payload.
-    const tabId = sender.tab?.id;
-    if (sender.id !== chrome.runtime.id || tabId === undefined) {
-      if (request.type === EVALUATE_MESSAGE) {
-        sendResponse({
-          ok: false,
-          preview: "Evaluation request rejected: unknown sender.",
-        } satisfies EvaluateResponse);
-      } else if (request.type === GET_COOKIES_MESSAGE) {
-        sendResponse({
-          ok: false,
-          cookies: [],
-          error: "Request rejected: unknown sender.",
-        } satisfies GetCookiesResponse);
-      } else if (request.type === GET_NETWORK_DETAILS_MESSAGE) {
-        sendResponse({
-          ok: false,
-          entries: [],
-        } satisfies GetNetworkDetailsResponse);
-      } else {
-        sendResponse({ ok: false } satisfies
-          | InterceptConsoleResponse
-          | DeleteCookieResponse
-          | SetCookieResponse
-          | ClearSiteCookiesResponse
-          | TrackInspectorResponse
-          | FetchSourceResponse
-          | InterceptNetworkResponse
-          | RequestCookieAccessResponse);
-      }
-      return;
-    }
-
-    if (request.type === GET_COOKIES_MESSAGE) {
-      const tabUrl = sender.tab?.url;
-      if (!tabUrl || !/^https?:/.test(tabUrl)) {
-        sendResponse({
-          ok: false,
-          cookies: [],
-          error: "Cookies are only readable on http(s) pages.",
-        } satisfies GetCookiesResponse);
-        return;
-      }
-
-      void (async () => {
-        try {
-          const scope = request.scope === "all" ? "all" : "site";
-          // Report a missing grant explicitly rather than relying on the
-          // cookies API failure shape, so the panel can offer the fix.
-          const granted = await chrome.permissions.contains({
-            origins:
-              scope === "all" ? ALL_HOSTS : [`${new URL(tabUrl).origin}/*`],
-          });
-          if (!granted) {
-            sendResponse({
-              ok: false,
-              cookies: [],
-              granted: false,
-              error:
-                scope === "all"
-                  ? "Access to all sites has not been granted."
-                  : "Cookie access has not been granted for this site.",
-            } satisfies GetCookiesResponse);
-            return;
-          }
-
-          // Unfiltered getAll lists every cookie the grant reaches — the
-          // whole profile for "all", the page's own cookies for "site".
-          const cookies =
-            scope === "all"
-              ? await chrome.cookies.getAll({})
-              : await chrome.cookies.getAll({ url: tabUrl });
-          sendResponse({
-            ok: true,
-            granted: true,
-            cookies: cookies.map((cookie): CookieEntry => ({
-              name: cookie.name,
-              value: cookie.value,
-              domain: cookie.domain,
-              path: cookie.path,
-              expirationDate: cookie.expirationDate,
-              httpOnly: cookie.httpOnly,
-              secure: cookie.secure,
-              sameSite: cookie.sameSite,
-            })),
-          } satisfies GetCookiesResponse);
-        } catch (error) {
+    void (async () => {
+      try {
+        const scope = request.scope === "all" ? "all" : "site";
+        // Report a missing grant explicitly rather than relying on the
+        // cookies API failure shape, so the panel can offer the fix.
+        const granted = await chrome.permissions.contains({
+          origins:
+            scope === "all" ? ALL_HOSTS : [`${new URL(tabUrl).origin}/*`],
+        });
+        if (!granted) {
           sendResponse({
             ok: false,
             cookies: [],
-            error: describeCookieError(error, "read cookies"),
+            granted: false,
+            error:
+              scope === "all"
+                ? "Access to all sites has not been granted."
+                : "Cookie access has not been granted for this site.",
           } satisfies GetCookiesResponse);
+          return;
         }
-      })();
 
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (request.type === REQUEST_COOKIE_ACCESS_MESSAGE) {
-      const tabUrl = sender.tab?.url;
-      if (!tabUrl || !/^https?:/.test(tabUrl)) {
+        // Unfiltered getAll lists every cookie the grant reaches — the
+        // whole profile for "all", the page's own cookies for "site".
+        const cookies =
+          scope === "all"
+            ? await chrome.cookies.getAll({})
+            : await chrome.cookies.getAll({ url: tabUrl });
+        sendResponse({
+          ok: true,
+          granted: true,
+          cookies: cookies.map((cookie): CookieEntry => ({
+            name: cookie.name,
+            value: cookie.value,
+            domain: cookie.domain,
+            path: cookie.path,
+            expirationDate: cookie.expirationDate,
+            httpOnly: cookie.httpOnly,
+            secure: cookie.secure,
+            sameSite: cookie.sameSite,
+          })),
+        } satisfies GetCookiesResponse);
+      } catch (error) {
         sendResponse({
           ok: false,
-          error: "Cookies are only available on http(s) pages.",
+          cookies: [],
+          error: describeCookieError(error, "read cookies"),
+        } satisfies GetCookiesResponse);
+      }
+    })();
+
+    // Keep the message channel open for the async response.
+    return true;
+  }
+
+  if (request.type === REQUEST_COOKIE_ACCESS_MESSAGE) {
+    const tabUrl = sender.tab?.url;
+    if (!tabUrl || !/^https?:/.test(tabUrl)) {
+      sendResponse({
+        ok: false,
+        error: "Cookies are only available on http(s) pages.",
+      } satisfies RequestCookieAccessResponse);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const granted = await chrome.permissions.request({
+          origins:
+            request.scope === "all"
+              ? ALL_HOSTS
+              : [`${new URL(tabUrl).origin}/*`],
+        });
+        sendResponse({
+          ok: granted,
+          error: granted ? undefined : "Permission was declined.",
         } satisfies RequestCookieAccessResponse);
-        return;
-      }
-
-      void (async () => {
-        try {
-          const granted = await chrome.permissions.request({
-            origins:
-              request.scope === "all"
-                ? ALL_HOSTS
-                : [`${new URL(tabUrl).origin}/*`],
-          });
-          sendResponse({
-            ok: granted,
-            error: granted ? undefined : "Permission was declined.",
-          } satisfies RequestCookieAccessResponse);
-        } catch (error) {
-          // Most likely the click gesture did not survive the round-trip.
-          sendResponse({
-            ok: false,
-            error:
-              error instanceof Error
-                ? `Could not request access: ${error.message}. Try relaunching from the toolbar popup instead.`
-                : "Could not request cookie access. Try relaunching from the toolbar popup instead.",
-          } satisfies RequestCookieAccessResponse);
-        }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (request.type === DELETE_COOKIE_MESSAGE) {
-      const tabUrl = sender.tab?.url;
-      const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
-      const host = tab?.hostname ?? "";
-      const valid =
-        typeof request.name === "string" &&
-        typeof request.domain === "string" &&
-        typeof request.path === "string" &&
-        request.path.startsWith("/") &&
-        typeof request.secure === "boolean";
-      if (!valid || tab === null) {
+      } catch (error) {
+        // Most likely the click gesture did not survive the round-trip.
         sendResponse({
           ok: false,
-          error: "Cookie deletion rejected.",
+          error:
+            error instanceof Error
+              ? `Could not request access: ${error.message}. Try relaunching from the toolbar popup instead.`
+              : "Could not request cookie access. Try relaunching from the toolbar popup instead.",
+        } satisfies RequestCookieAccessResponse);
+      }
+    })();
+
+    // Keep the message channel open for the async response.
+    return true;
+  }
+
+  if (request.type === DELETE_COOKIE_MESSAGE) {
+    const tabUrl = sender.tab?.url;
+    const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
+    const host = tab?.hostname ?? "";
+    const valid =
+      typeof request.name === "string" &&
+      typeof request.domain === "string" &&
+      typeof request.path === "string" &&
+      request.path.startsWith("/") &&
+      typeof request.secure === "boolean";
+    if (!valid || tab === null) {
+      sendResponse({
+        ok: false,
+        error: "Cookie deletion rejected.",
+      } satisfies DeleteCookieResponse);
+      return;
+    }
+
+    void (async () => {
+      try {
+        // Cookies the page itself sees are always fair game; anything
+        // beyond that needs the explicit all-sites grant.
+        const allowed =
+          cookieVisibleToHost(host, request.domain) ||
+          (await chrome.permissions.contains({ origins: ALL_HOSTS }));
+        if (!allowed) {
+          sendResponse({
+            ok: false,
+            error: "Cookie deletion rejected.",
+          } satisfies DeleteCookieResponse);
+          return;
+        }
+
+        const cookieUrl = cookieRequestUrl(
+          tab,
+          request.domain,
+          request.path,
+          request.secure,
+        );
+        const details = await chrome.cookies.remove({
+          url: cookieUrl,
+          name: request.name,
+        });
+        sendResponse({
+          ok: details !== null,
+          error:
+            details === null ? "The cookie could not be deleted." : undefined,
         } satisfies DeleteCookieResponse);
-        return;
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: describeCookieError(error, "delete the cookie"),
+        } satisfies DeleteCookieResponse);
       }
+    })();
 
-      void (async () => {
-        try {
-          // Cookies the page itself sees are always fair game; anything
-          // beyond that needs the explicit all-sites grant.
-          const allowed =
-            cookieVisibleToHost(host, request.domain) ||
-            (await chrome.permissions.contains({ origins: ALL_HOSTS }));
-          if (!allowed) {
-            sendResponse({
-              ok: false,
-              error: "Cookie deletion rejected.",
-            } satisfies DeleteCookieResponse);
-            return;
-          }
+    // Keep the message channel open for the async response.
+    return true;
+  }
 
-          const cookieUrl = cookieRequestUrl(
-            tab,
-            request.domain,
-            request.path,
-            request.secure,
-          );
-          const details = await chrome.cookies.remove({
-            url: cookieUrl,
-            name: request.name,
-          });
-          sendResponse({
-            ok: details !== null,
-            error:
-              details === null ? "The cookie could not be deleted." : undefined,
-          } satisfies DeleteCookieResponse);
-        } catch (error) {
-          sendResponse({
-            ok: false,
-            error: describeCookieError(error, "delete the cookie"),
-          } satisfies DeleteCookieResponse);
-        }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
+  if (request.type === SET_COOKIE_MESSAGE) {
+    const tabUrl = sender.tab?.url;
+    const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
+    if (tab === null) {
+      sendResponse({
+        ok: false,
+        error: "Cookies can only be edited on http(s) pages.",
+      } satisfies SetCookieResponse);
+      return;
+    }
+    if (
+      !isCookieDraft(request.next) ||
+      (request.original !== null && !isCookieIdentity(request.original))
+    ) {
+      sendResponse({
+        ok: false,
+        error: "Cookie edit rejected.",
+      } satisfies SetCookieResponse);
+      return;
+    }
+    const invalid = validateCookieDraft(request.next);
+    if (invalid) {
+      sendResponse({ ok: false, error: invalid } satisfies SetCookieResponse);
+      return;
     }
 
-    if (request.type === SET_COOKIE_MESSAGE) {
-      const tabUrl = sender.tab?.url;
-      const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
-      if (tab === null) {
-        sendResponse({
-          ok: false,
-          error: "Cookies can only be edited on http(s) pages.",
-        } satisfies SetCookieResponse);
-        return;
-      }
-      if (
-        !isCookieDraft(request.next) ||
-        (request.original !== null && !isCookieIdentity(request.original))
-      ) {
-        sendResponse({
-          ok: false,
-          error: "Cookie edit rejected.",
-        } satisfies SetCookieResponse);
-        return;
-      }
-      const invalid = validateCookieDraft(request.next);
-      if (invalid) {
-        sendResponse({ ok: false, error: invalid } satisfies SetCookieResponse);
-        return;
-      }
+    const { original, next } = request;
+    void (async () => {
+      try {
+        // Same rule as deletion: cookies the page itself sees are fair
+        // game under the per-site grant; anything else — including the
+        // cookie being moved away from — needs the all-sites grant.
+        const touched = [next.domain || tab.hostname].concat(
+          original ? [original.domain] : [],
+        );
+        const allowed =
+          touched.every((domain) =>
+            cookieVisibleToHost(tab.hostname, domain),
+          ) || (await chrome.permissions.contains({ origins: ALL_HOSTS }));
+        if (!allowed) {
+          sendResponse({
+            ok: false,
+            error: "Cookie edit rejected.",
+          } satisfies SetCookieResponse);
+          return;
+        }
 
-      const { original, next } = request;
-      void (async () => {
-        try {
-          // Same rule as deletion: cookies the page itself sees are fair
-          // game under the per-site grant; anything else — including the
-          // cookie being moved away from — needs the all-sites grant.
-          const touched = [next.domain || tab.hostname].concat(
-            original ? [original.domain] : [],
+        // Renames and re-scopes change the cookie's identity: capture the
+        // old cookie for rollback, remove it, then write the replacement.
+        const identityChanged =
+          original !== null &&
+          (original.name !== next.name ||
+            original.domain !== next.domain ||
+            original.path !== next.path);
+        let backup: chrome.cookies.Cookie | null = null;
+        if (identityChanged && original) {
+          const originalUrl = cookieRequestUrl(
+            tab,
+            original.domain,
+            original.path,
+            original.secure,
           );
-          const allowed =
-            touched.every((domain) =>
-              cookieVisibleToHost(tab.hostname, domain),
-            ) || (await chrome.permissions.contains({ origins: ALL_HOSTS }));
-          if (!allowed) {
-            sendResponse({
-              ok: false,
-              error: "Cookie edit rejected.",
-            } satisfies SetCookieResponse);
-            return;
-          }
+          backup = await chrome.cookies.get({
+            url: originalUrl,
+            name: original.name,
+          });
+          await chrome.cookies.remove({
+            url: originalUrl,
+            name: original.name,
+          });
+        }
 
-          // Renames and re-scopes change the cookie's identity: capture the
-          // old cookie for rollback, remove it, then write the replacement.
-          const identityChanged =
-            original !== null &&
-            (original.name !== next.name ||
-              original.domain !== next.domain ||
-              original.path !== next.path);
-          let backup: chrome.cookies.Cookie | null = null;
-          if (identityChanged && original) {
-            const originalUrl = cookieRequestUrl(
-              tab,
-              original.domain,
-              original.path,
-              original.secure,
-            );
-            backup = await chrome.cookies.get({
-              url: originalUrl,
-              name: original.name,
-            });
-            await chrome.cookies.remove({
-              url: originalUrl,
-              name: original.name,
-            });
-          }
-
-          try {
-            const written = await chrome.cookies.set({
-              url: cookieRequestUrl(tab, next.domain, next.path, next.secure),
-              name: next.name,
-              value: next.value,
-              path: next.path,
-              // A leading dot means a domain cookie; omitting `domain`
-              // makes the cookie host-only for the URL's host.
-              ...(next.domain.startsWith(".")
-                ? { domain: next.domain.replace(/^\./, "") }
-                : {}),
-              ...(next.expirationDate !== undefined
-                ? { expirationDate: next.expirationDate }
-                : {}),
-              httpOnly: next.httpOnly,
-              secure: next.secure,
-              sameSite: next.sameSite,
-            });
-            if (!written) throw new Error("Chrome rejected the cookie.");
-            sendResponse({ ok: true } satisfies SetCookieResponse);
-          } catch (error) {
-            // Restore the removed original so a failed rename never turns
-            // into a silent delete.
-            if (backup) {
-              await chrome.cookies
-                .set({
-                  url: cookieRequestUrl(
-                    tab,
-                    backup.domain,
-                    backup.path,
-                    backup.secure,
-                  ),
-                  name: backup.name,
-                  value: backup.value,
-                  path: backup.path,
-                  ...(backup.hostOnly
-                    ? {}
-                    : { domain: backup.domain.replace(/^\./, "") }),
-                  ...(backup.session || backup.expirationDate === undefined
-                    ? {}
-                    : { expirationDate: backup.expirationDate }),
-                  httpOnly: backup.httpOnly,
-                  secure: backup.secure,
-                  sameSite: backup.sameSite,
-                })
-                .catch(() => undefined);
-            }
-            sendResponse({
-              ok: false,
-              error: describeCookieError(error, "save the cookie"),
-            } satisfies SetCookieResponse);
-          }
+        try {
+          const written = await chrome.cookies.set({
+            url: cookieRequestUrl(tab, next.domain, next.path, next.secure),
+            name: next.name,
+            value: next.value,
+            path: next.path,
+            // A leading dot means a domain cookie; omitting `domain`
+            // makes the cookie host-only for the URL's host.
+            ...(next.domain.startsWith(".")
+              ? { domain: next.domain.replace(/^\./, "") }
+              : {}),
+            ...(next.expirationDate !== undefined
+              ? { expirationDate: next.expirationDate }
+              : {}),
+            httpOnly: next.httpOnly,
+            secure: next.secure,
+            sameSite: next.sameSite,
+          });
+          if (!written) throw new Error("Chrome rejected the cookie.");
+          sendResponse({ ok: true } satisfies SetCookieResponse);
         } catch (error) {
+          // Restore the removed original so a failed rename never turns
+          // into a silent delete.
+          if (backup) {
+            await chrome.cookies
+              .set({
+                url: cookieRequestUrl(
+                  tab,
+                  backup.domain,
+                  backup.path,
+                  backup.secure,
+                ),
+                name: backup.name,
+                value: backup.value,
+                path: backup.path,
+                ...(backup.hostOnly
+                  ? {}
+                  : { domain: backup.domain.replace(/^\./, "") }),
+                ...(backup.session || backup.expirationDate === undefined
+                  ? {}
+                  : { expirationDate: backup.expirationDate }),
+                httpOnly: backup.httpOnly,
+                secure: backup.secure,
+                sameSite: backup.sameSite,
+              })
+              .catch(() => undefined);
+          }
           sendResponse({
             ok: false,
             error: describeCookieError(error, "save the cookie"),
           } satisfies SetCookieResponse);
         }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (request.type === CLEAR_SITE_COOKIES_MESSAGE) {
-      const tabUrl = sender.tab?.url;
-      const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
-      if (tab === null) {
+      } catch (error) {
         sendResponse({
           ok: false,
-          error: "Cookies can only be cleared on http(s) pages.",
-        } satisfies ClearSiteCookiesResponse);
-        return;
+          error: describeCookieError(error, "save the cookie"),
+        } satisfies SetCookieResponse);
       }
-
-      void (async () => {
-        try {
-          const granted = await chrome.permissions.contains({
-            origins: [`${tab.origin}/*`],
-          });
-          if (!granted) {
-            sendResponse({
-              ok: false,
-              error: "Cookie access has not been granted for this site.",
-            } satisfies ClearSiteCookiesResponse);
-            return;
-          }
-
-          // Always scoped to what this page can see, never the whole profile.
-          const cookies = await chrome.cookies.getAll({ url: tab.href });
-          let removed = 0;
-          for (const cookie of cookies) {
-            const result = await chrome.cookies
-              .remove({
-                url: cookieRequestUrl(
-                  tab,
-                  cookie.domain,
-                  cookie.path,
-                  cookie.secure,
-                ),
-                name: cookie.name,
-              })
-              .catch(() => null);
-            if (result) removed += 1;
-          }
-          sendResponse({
-            ok: true,
-            removed,
-          } satisfies ClearSiteCookiesResponse);
-        } catch (error) {
-          sendResponse({
-            ok: false,
-            error: describeCookieError(error, "clear cookies"),
-          } satisfies ClearSiteCookiesResponse);
-        }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (request.type === INTERCEPT_NETWORK_MESSAGE) {
-      if (
-        typeof request.eventName !== "string" ||
-        !isNetworkEventName(request.eventName)
-      ) {
-        sendResponse({ ok: false } satisfies InterceptNetworkResponse);
-        return;
-      }
-
-      const eventName = request.eventName;
-      void (async () => {
-        try {
-          // Idempotent: installs the wrapper unless the document_start
-          // registration (or an earlier launch) already has.
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            injectImmediately: true,
-            files: [NETWORK_PREHOOK],
-          });
-          const [injection] = await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            injectImmediately: true,
-            func: connectNetworkHook,
-            args: [eventName],
-          });
-          sendResponse({
-            ok: injection?.result === true,
-          } satisfies InterceptNetworkResponse);
-        } catch {
-          sendResponse({ ok: false } satisfies InterceptNetworkResponse);
-        }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (request.type === GET_NETWORK_DETAILS_MESSAGE) {
-      const log = webRequestLog.get(tabId);
-      sendResponse({
-        ok: true,
-        entries: log ? Array.from(log.values()) : [],
-      } satisfies GetNetworkDetailsResponse);
-      return;
-    }
-
-    if (request.type === FETCH_SOURCE_MESSAGE) {
-      if (
-        typeof request.url !== "string" ||
-        !/^https?:\/\//.test(request.url)
-      ) {
-        sendResponse({
-          ok: false,
-          error: "Only http(s) resources can be fetched.",
-        } satisfies FetchSourceResponse);
-        return;
-      }
-
-      const url = request.url;
-      void (async () => {
-        try {
-          // Prefer the HTTP cache (the page already loaded this resource)
-          // and never attach credentials: source viewing needs no cookies.
-          const response = await fetch(url, {
-            cache: "force-cache",
-            credentials: "omit",
-          });
-          if (!response.ok) {
-            sendResponse({
-              ok: false,
-              error: `The server responded with ${response.status}.`,
-            } satisfies FetchSourceResponse);
-            return;
-          }
-          const { text, truncated } = await readBodyCapped(
-            response,
-            SOURCE_FETCH_LIMIT,
-          );
-          sendResponse({
-            ok: true,
-            content: text,
-            truncated,
-          } satisfies FetchSourceResponse);
-        } catch {
-          sendResponse({
-            ok: false,
-            error:
-              "The file could not be fetched — its host blocks cross-origin reads and no host permission covers it.",
-          } satisfies FetchSourceResponse);
-        }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (request.type === INTERCEPT_CONSOLE_MESSAGE) {
-      if (
-        typeof request.eventName !== "string" ||
-        !isConsoleEventName(request.eventName)
-      ) {
-        sendResponse({ ok: false } satisfies InterceptConsoleResponse);
-        return;
-      }
-
-      const eventName = request.eventName;
-      void (async () => {
-        try {
-          // Idempotent: installs the wrapper unless the document_start
-          // registration (or an earlier launch) already has.
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            injectImmediately: true,
-            files: [CONSOLE_PREHOOK],
-          });
-          const [injection] = await chrome.scripting.executeScript({
-            target: { tabId },
-            world: "MAIN",
-            injectImmediately: true,
-            func: connectConsoleHook,
-            args: [eventName],
-          });
-          sendResponse({
-            ok: injection?.result === true,
-          } satisfies InterceptConsoleResponse);
-        } catch {
-          sendResponse({ ok: false } satisfies InterceptConsoleResponse);
-        }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (request.type === TRACK_INSPECTOR_MESSAGE) {
-      const tabUrl = sender.tab?.url;
-      void (async () => {
-        try {
-          if (request.open === true) {
-            if (!tabUrl || !/^https?:/.test(tabUrl)) {
-              sendResponse({ ok: false } satisfies TrackInspectorResponse);
-              return;
-            }
-            const origin = new URL(tabUrl).origin;
-            openTabIds.add(tabId);
-            await sessionStore.set({ [openTabKey(tabId)]: origin });
-            await ensurePrehookRegistered(origin).catch(() => undefined);
-
-            // Panel-tab memory, per origin: a panel switch stores the name;
-            // a plain open gets the remembered one echoed back.
-            if (
-              typeof request.activeTab === "string" &&
-              request.activeTab.length <= 32
-            ) {
-              await sessionStore.set({
-                [panelKey(origin)]: request.activeTab,
-              });
-              sendResponse({ ok: true } satisfies TrackInspectorResponse);
-            } else {
-              const stored = await sessionStore.get(panelKey(origin));
-              const activeTab = stored[panelKey(origin)];
-              sendResponse({
-                ok: true,
-                ...(typeof activeTab === "string" ? { activeTab } : {}),
-              } satisfies TrackInspectorResponse);
-            }
-          } else {
-            openTabIds.delete(tabId);
-            const key = openTabKey(tabId);
-            const stored = await sessionStore.get(key);
-            const origin = stored[key] as string | undefined;
-            await sessionStore.remove(key);
-            if (origin !== undefined) await unregisterPrehookIfUnused(origin);
-            sendResponse({ ok: true } satisfies TrackInspectorResponse);
-          }
-        } catch {
-          sendResponse({ ok: false } satisfies TrackInspectorResponse);
-        }
-      })();
-
-      // Keep the message channel open for the async response.
-      return true;
-    }
-
-    if (typeof request.expression !== "string") {
-      return;
-    }
-
-    chrome.scripting
-      .executeScript({
-        target: { tabId },
-        world: "MAIN",
-        func: evaluateInPage,
-        args: [request.expression, PREVIEW_LIMIT],
-      })
-      .then(([injection]) => {
-        sendResponse(
-          (injection?.result as EvaluateResponse | undefined) ?? {
-            ok: false,
-            preview: "The page did not return a result.",
-          },
-        );
-      })
-      .catch((error: unknown) => {
-        sendResponse({
-          ok: false,
-          preview:
-            error instanceof Error
-              ? `Could not evaluate: ${error.message}`
-              : "Could not evaluate in this tab.",
-        } satisfies EvaluateResponse);
-      });
+    })();
 
     // Keep the message channel open for the async response.
     return true;
-  },
-);
+  }
+
+  if (request.type === CLEAR_SITE_COOKIES_MESSAGE) {
+    const tabUrl = sender.tab?.url;
+    const tab = tabUrl && /^https?:/.test(tabUrl) ? new URL(tabUrl) : null;
+    if (tab === null) {
+      sendResponse({
+        ok: false,
+        error: "Cookies can only be cleared on http(s) pages.",
+      } satisfies ClearSiteCookiesResponse);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const granted = await chrome.permissions.contains({
+          origins: [`${tab.origin}/*`],
+        });
+        if (!granted) {
+          sendResponse({
+            ok: false,
+            error: "Cookie access has not been granted for this site.",
+          } satisfies ClearSiteCookiesResponse);
+          return;
+        }
+
+        // Always scoped to what this page can see, never the whole profile.
+        const cookies = await chrome.cookies.getAll({ url: tab.href });
+        let removed = 0;
+        for (const cookie of cookies) {
+          const result = await chrome.cookies
+            .remove({
+              url: cookieRequestUrl(
+                tab,
+                cookie.domain,
+                cookie.path,
+                cookie.secure,
+              ),
+              name: cookie.name,
+            })
+            .catch(() => null);
+          if (result) removed += 1;
+        }
+        sendResponse({
+          ok: true,
+          removed,
+        } satisfies ClearSiteCookiesResponse);
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: describeCookieError(error, "clear cookies"),
+        } satisfies ClearSiteCookiesResponse);
+      }
+    })();
+
+    // Keep the message channel open for the async response.
+    return true;
+  }
+
+  if (request.type === INTERCEPT_NETWORK_MESSAGE) {
+    if (
+      typeof request.eventName !== "string" ||
+      !isNetworkEventName(request.eventName)
+    ) {
+      sendResponse({ ok: false } satisfies InterceptNetworkResponse);
+      return;
+    }
+
+    const eventName = request.eventName;
+    void (async () => {
+      try {
+        // Idempotent: installs the wrapper unless the document_start
+        // registration (or an earlier launch) already has.
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          injectImmediately: true,
+          files: [NETWORK_PREHOOK],
+        });
+        const [injection] = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          injectImmediately: true,
+          func: connectNetworkHook,
+          args: [eventName],
+        });
+        sendResponse({
+          ok: injection?.result === true,
+        } satisfies InterceptNetworkResponse);
+      } catch {
+        sendResponse({ ok: false } satisfies InterceptNetworkResponse);
+      }
+    })();
+
+    // Keep the message channel open for the async response.
+    return true;
+  }
+
+  if (request.type === GET_NETWORK_DETAILS_MESSAGE) {
+    const log = webRequestLog.get(tabId);
+    sendResponse({
+      ok: true,
+      entries: log ? Array.from(log.values()) : [],
+    } satisfies GetNetworkDetailsResponse);
+    return;
+  }
+
+  if (request.type === FETCH_SOURCE_MESSAGE) {
+    if (typeof request.url !== "string" || !/^https?:\/\//.test(request.url)) {
+      sendResponse({
+        ok: false,
+        error: "Only http(s) resources can be fetched.",
+      } satisfies FetchSourceResponse);
+      return;
+    }
+
+    const url = request.url;
+    void (async () => {
+      try {
+        // Prefer the HTTP cache (the page already loaded this resource)
+        // and never attach credentials: source viewing needs no cookies.
+        const response = await fetch(url, {
+          cache: "force-cache",
+          credentials: "omit",
+        });
+        if (!response.ok) {
+          sendResponse({
+            ok: false,
+            error: `The server responded with ${response.status}.`,
+          } satisfies FetchSourceResponse);
+          return;
+        }
+        const { text, truncated } = await readBodyCapped(
+          response,
+          SOURCE_FETCH_LIMIT,
+        );
+        sendResponse({
+          ok: true,
+          content: text,
+          truncated,
+        } satisfies FetchSourceResponse);
+      } catch {
+        sendResponse({
+          ok: false,
+          error:
+            "The file could not be fetched — its host blocks cross-origin reads and no host permission covers it.",
+        } satisfies FetchSourceResponse);
+      }
+    })();
+
+    // Keep the message channel open for the async response.
+    return true;
+  }
+
+  if (request.type === INTERCEPT_CONSOLE_MESSAGE) {
+    if (
+      typeof request.eventName !== "string" ||
+      !isConsoleEventName(request.eventName)
+    ) {
+      sendResponse({ ok: false } satisfies InterceptConsoleResponse);
+      return;
+    }
+
+    const eventName = request.eventName;
+    void (async () => {
+      try {
+        // Idempotent: installs the wrapper unless the document_start
+        // registration (or an earlier launch) already has.
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          injectImmediately: true,
+          files: [CONSOLE_PREHOOK],
+        });
+        const [injection] = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          injectImmediately: true,
+          func: connectConsoleHook,
+          args: [eventName],
+        });
+        sendResponse({
+          ok: injection?.result === true,
+        } satisfies InterceptConsoleResponse);
+      } catch {
+        sendResponse({ ok: false } satisfies InterceptConsoleResponse);
+      }
+    })();
+
+    // Keep the message channel open for the async response.
+    return true;
+  }
+
+  if (request.type === TRACK_INSPECTOR_MESSAGE) {
+    const tabUrl = sender.tab?.url;
+    void (async () => {
+      try {
+        if (request.open === true) {
+          if (!tabUrl || !/^https?:/.test(tabUrl)) {
+            sendResponse({ ok: false } satisfies TrackInspectorResponse);
+            return;
+          }
+          const origin = new URL(tabUrl).origin;
+          openTabIds.add(tabId);
+          await sessionStore.set({ [openTabKey(tabId)]: origin });
+          await ensurePrehookRegistered(origin).catch(() => undefined);
+
+          // Panel-tab memory, per origin: a panel switch stores the name;
+          // a plain open gets the remembered one echoed back.
+          if (
+            typeof request.activeTab === "string" &&
+            request.activeTab.length <= 32
+          ) {
+            await sessionStore.set({
+              [panelKey(origin)]: request.activeTab,
+            });
+            sendResponse({ ok: true } satisfies TrackInspectorResponse);
+          } else {
+            const stored = await sessionStore.get(panelKey(origin));
+            const activeTab = stored[panelKey(origin)];
+            sendResponse({
+              ok: true,
+              ...(typeof activeTab === "string" ? { activeTab } : {}),
+            } satisfies TrackInspectorResponse);
+          }
+        } else {
+          openTabIds.delete(tabId);
+          const key = openTabKey(tabId);
+          const stored = await sessionStore.get(key);
+          const origin = stored[key] as string | undefined;
+          await sessionStore.remove(key);
+          if (origin !== undefined) await unregisterPrehookIfUnused(origin);
+          sendResponse({ ok: true } satisfies TrackInspectorResponse);
+        }
+      } catch {
+        sendResponse({ ok: false } satisfies TrackInspectorResponse);
+      }
+    })();
+
+    // Keep the message channel open for the async response.
+    return true;
+  }
+
+  if (typeof request.expression !== "string") {
+    return;
+  }
+
+  chrome.scripting
+    .executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: evaluateInPage,
+      args: [request.expression, PREVIEW_LIMIT],
+    })
+    .then(([injection]) => {
+      sendResponse(
+        (injection?.result as EvaluateResponse | undefined) ?? {
+          ok: false,
+          preview: "The page did not return a result.",
+        },
+      );
+    })
+    .catch((error: unknown) => {
+      sendResponse({
+        ok: false,
+        preview:
+          error instanceof Error
+            ? `Could not evaluate: ${error.message}`
+            : "Could not evaluate in this tab.",
+      } satisfies EvaluateResponse);
+    });
+
+  // Keep the message channel open for the async response.
+  return true;
+}

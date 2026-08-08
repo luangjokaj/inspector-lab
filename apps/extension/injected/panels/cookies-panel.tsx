@@ -74,6 +74,23 @@ const MutedCell = styled.td`
   color: ${({ theme }) => theme.devtools.textSubtle};
 `;
 
+/** A column `document.cookie` cannot answer for. Blank would read as "false". */
+const UnknownCell = styled.td`
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  text-align: center;
+  opacity: 0.6;
+`;
+
+/** Says which source the list came from, and what it costs. */
+const SourceNote = styled.div`
+  padding: 2px 6px;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-family: ${({ theme }) => theme.devtools.fontFamily};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  background: ${({ theme }) => theme.devtools.surfaceSubtle};
+  border-bottom: solid 1px ${({ theme }) => theme.devtools.border};
+`;
+
 /** ✓ marks for HttpOnly / Secure; double-click toggles the flag. */
 const FlagCell = styled.td`
   color: ${({ theme }) => theme.devtools.textSubtle};
@@ -113,6 +130,9 @@ const ErrorNote = styled.div`
   background: ${({ theme }) => theme.devtools.status.errorBackground};
   border-bottom: solid 1px ${({ theme }) => theme.devtools.status.errorBorder};
 `;
+
+const UNKNOWN_HINT =
+  "document.cookie does not reveal this. Relaunch the inspector to read cookies through the extension.";
 
 const SAME_SITE_LABELS: Record<CookieEntry["sameSite"], string> = {
   strict: "Strict",
@@ -191,6 +211,8 @@ export function CookiesPanel({
   const [cookies, setCookies] = useState<CookieEntry[] | null>(null);
   const [granted, setGranted] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Set when the list came from the page rather than the cookie store. */
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [draftRow, setDraftRow] = useState<{
     name: string;
@@ -200,6 +222,9 @@ export function CookiesPanel({
   const refresh = useCallback(async () => {
     const response = await loadCookies(scope);
     setGranted(response.granted !== false);
+    setFallbackReason(
+      response.source === "document" ? (response.fallbackReason ?? "") : null,
+    );
     if (response.ok) {
       setError(null);
       setCookies(
@@ -378,6 +403,13 @@ export function CookiesPanel({
 
       {error && <ErrorNote role="alert">{error}</ErrorNote>}
 
+      {fallbackReason !== null && (
+        <SourceNote role="status">
+          {fallbackReason} Showing what the page itself can read: HttpOnly
+          cookies are not listed, and the columns after Value are unknown.
+        </SourceNote>
+      )}
+
       <Scroller>
         {cookies === null ? (
           <EmptyState>Reading cookies…</EmptyState>
@@ -432,50 +464,69 @@ export function CookiesPanel({
                     muted
                     onCommit={(next) => saveField(cookie, { value: next })}
                   />
-                  <EditableCell
-                    value={cookie.domain}
-                    label={`Edit domain of cookie ${cookie.name}`}
-                    muted
-                    onCommit={(next) => saveField(cookie, { domain: next })}
-                  />
-                  <EditableCell
-                    value={cookie.path}
-                    label={`Edit path of cookie ${cookie.name}`}
-                    muted
-                    onCommit={(next) => saveField(cookie, { path: next })}
-                  />
-                  <EditableCell
-                    value={expiresLabel(cookie)}
-                    label={`Edit expiry of cookie ${cookie.name}`}
-                    muted
-                    onCommit={(next) => saveExpires(cookie, next)}
-                  />
-                  <MutedCell>
-                    {cookie.name.length + cookie.value.length}
-                  </MutedCell>
-                  <FlagCell
-                    title="Double-click to toggle HttpOnly"
-                    onDoubleClick={() =>
-                      saveField(cookie, { httpOnly: !cookie.httpOnly })
-                    }
-                  >
-                    {cookie.httpOnly ? "✓" : ""}
-                  </FlagCell>
-                  <FlagCell
-                    title="Double-click to toggle Secure"
-                    onDoubleClick={() =>
-                      saveField(cookie, { secure: !cookie.secure })
-                    }
-                  >
-                    {cookie.secure ? "✓" : ""}
-                  </FlagCell>
-                  <EditableCell
-                    value={SAME_SITE_LABELS[cookie.sameSite]}
-                    label={`Edit SameSite of cookie ${cookie.name}`}
-                    muted
-                    placeholder="Strict, Lax, None"
-                    onCommit={(next) => saveSameSite(cookie, next)}
-                  />
+                  {cookie.partial ? (
+                    /* Read from document.cookie, which reveals names and
+                       values and nothing else. Rendering a default here would
+                       be stating a fact the panel does not have. */
+                    <>
+                      <UnknownCell title={UNKNOWN_HINT}>—</UnknownCell>
+                      <UnknownCell title={UNKNOWN_HINT}>—</UnknownCell>
+                      <UnknownCell title={UNKNOWN_HINT}>—</UnknownCell>
+                      <MutedCell>
+                        {cookie.name.length + cookie.value.length}
+                      </MutedCell>
+                      <UnknownCell title={UNKNOWN_HINT}>—</UnknownCell>
+                      <UnknownCell title={UNKNOWN_HINT}>—</UnknownCell>
+                      <UnknownCell title={UNKNOWN_HINT}>—</UnknownCell>
+                    </>
+                  ) : (
+                    <>
+                      <EditableCell
+                        value={cookie.domain}
+                        label={`Edit domain of cookie ${cookie.name}`}
+                        muted
+                        onCommit={(next) => saveField(cookie, { domain: next })}
+                      />
+                      <EditableCell
+                        value={cookie.path}
+                        label={`Edit path of cookie ${cookie.name}`}
+                        muted
+                        onCommit={(next) => saveField(cookie, { path: next })}
+                      />
+                      <EditableCell
+                        value={expiresLabel(cookie)}
+                        label={`Edit expiry of cookie ${cookie.name}`}
+                        muted
+                        onCommit={(next) => saveExpires(cookie, next)}
+                      />
+                      <MutedCell>
+                        {cookie.name.length + cookie.value.length}
+                      </MutedCell>
+                      <FlagCell
+                        title="Double-click to toggle HttpOnly"
+                        onDoubleClick={() =>
+                          saveField(cookie, { httpOnly: !cookie.httpOnly })
+                        }
+                      >
+                        {cookie.httpOnly ? "✓" : ""}
+                      </FlagCell>
+                      <FlagCell
+                        title="Double-click to toggle Secure"
+                        onDoubleClick={() =>
+                          saveField(cookie, { secure: !cookie.secure })
+                        }
+                      >
+                        {cookie.secure ? "✓" : ""}
+                      </FlagCell>
+                      <EditableCell
+                        value={SAME_SITE_LABELS[cookie.sameSite]}
+                        label={`Edit SameSite of cookie ${cookie.name}`}
+                        muted
+                        placeholder="Strict, Lax, None"
+                        onCommit={(next) => saveSameSite(cookie, next)}
+                      />
+                    </>
+                  )}
                   <GridActionCell>
                     <IconButton
                       aria-label={`Delete cookie ${cookie.name}`}

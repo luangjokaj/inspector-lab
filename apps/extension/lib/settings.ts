@@ -33,31 +33,85 @@ function watchStorage(
   };
 }
 
+/**
+ * chrome.storage with the callback form, for the same reason ~lib/runtime-message
+ * uses it for messaging: the promise-returning form is a Chrome extension to the
+ * API, and on a callback-only runtime `await chrome.storage.local.get(key)`
+ * resolves to undefined. Reading a key off that throws, which here would mean
+ * the inspector silently ignoring the popup's theme choice.
+ *
+ * Both helpers resolve on whichever of callback or returned promise settles
+ * first, and never reject: every caller already treats storage as best-effort.
+ */
+function storageGet(key: string): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const accept = (items: unknown) => {
+      if (settled) return;
+      settled = true;
+      resolve((items as Record<string, unknown>) ?? {});
+    };
+
+    try {
+      const returned = chrome.storage.local.get(key, (items) => {
+        // Reading lastError marks it handled; leaving it logs a warning.
+        void chrome.runtime.lastError;
+        accept(items);
+      });
+      if (
+        typeof (returned as unknown as Promise<unknown>)?.then === "function"
+      ) {
+        (returned as unknown as Promise<unknown>).then(accept, () =>
+          accept({}),
+        );
+      }
+    } catch {
+      accept({});
+    }
+  });
+}
+
+function storageSet(items: Record<string, unknown>): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const accept = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+
+    try {
+      const returned = chrome.storage.local.set(items, () => {
+        accept(!chrome.runtime.lastError);
+      });
+      if (
+        typeof (returned as unknown as Promise<unknown>)?.then === "function"
+      ) {
+        (returned as unknown as Promise<unknown>).then(
+          () => accept(true),
+          () => accept(false),
+        );
+      }
+    } catch {
+      accept(false);
+    }
+  });
+}
+
 export const CUSTOM_THEME_STORAGE_KEY = "customInspectorTheme";
 
 /** True when the inspector should use the extension's own branding instead of
  *  the Chrome DevTools look. Defaults to true (branded) — only an explicit
  *  false stored by the popup toggle switches to the DevTools look. */
 export async function readCustomThemeSetting(): Promise<boolean> {
-  try {
-    const stored = await chrome.storage.local.get(CUSTOM_THEME_STORAGE_KEY);
-    return stored[CUSTOM_THEME_STORAGE_KEY] !== false;
-  } catch {
-    return true;
-  }
+  const stored = await storageGet(CUSTOM_THEME_STORAGE_KEY);
+  return stored[CUSTOM_THEME_STORAGE_KEY] !== false;
 }
 
 /** Persists the popup toggle. Resolves false when storage rejects, so the
  *  caller can roll its UI back. */
-export async function saveCustomThemeSetting(
-  enabled: boolean,
-): Promise<boolean> {
-  try {
-    await chrome.storage.local.set({ [CUSTOM_THEME_STORAGE_KEY]: enabled });
-    return true;
-  } catch {
-    return false;
-  }
+export function saveCustomThemeSetting(enabled: boolean): Promise<boolean> {
+  return storageSet({ [CUSTOM_THEME_STORAGE_KEY]: enabled });
 }
 
 /** Calls `onChange` whenever the popup flips the toggle; returns cleanup. */
@@ -86,23 +140,16 @@ export type InspectorColorScheme = "light" | "dark";
  * choice has been made yet — follow the OS.
  */
 export async function readColorSchemeSetting(): Promise<InspectorColorScheme | null> {
-  try {
-    const stored = await chrome.storage.local.get(COLOR_SCHEME_STORAGE_KEY);
-    const value = stored[COLOR_SCHEME_STORAGE_KEY];
-    return value === "light" || value === "dark" ? value : null;
-  } catch {
-    return null;
-  }
+  const stored = await storageGet(COLOR_SCHEME_STORAGE_KEY);
+  const value = stored[COLOR_SCHEME_STORAGE_KEY];
+  return value === "light" || value === "dark" ? value : null;
 }
 
 export async function saveColorSchemeSetting(
   scheme: InspectorColorScheme,
 ): Promise<void> {
-  try {
-    await chrome.storage.local.set({ [COLOR_SCHEME_STORAGE_KEY]: scheme });
-  } catch {
-    /* Best-effort: the inspector falls back to the OS preference. */
-  }
+  /* Best-effort: the inspector falls back to the OS preference. */
+  await storageSet({ [COLOR_SCHEME_STORAGE_KEY]: scheme });
 }
 
 /** Calls `onChange` when the popup's light/dark choice changes; cleanup fn. */

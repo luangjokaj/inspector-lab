@@ -5,6 +5,26 @@
  * background, which re-injects into the MAIN world.
  */
 
+export const PING_MESSAGE = "inspector-lab/ping" as const;
+
+/**
+ * Reachability probe, answered synchronously by the background — the only
+ * handler that does not hold the reply channel open across an await.
+ *
+ * That makes it a discriminator, not just a liveness check: a runtime where
+ * PING answers but every other message comes back empty is one that drops the
+ * asynchronous reply channel, which is a different problem from a background
+ * that never ran at all. On a tablet with no console, the difference is
+ * otherwise invisible.
+ */
+export type PingRequest = {
+  type: typeof PING_MESSAGE;
+};
+
+export type PingResponse = {
+  ok: boolean;
+};
+
 export const EVALUATE_MESSAGE = "inspector-lab/evaluate" as const;
 
 export type EvaluateRequest = {
@@ -81,7 +101,17 @@ export type CookieEntry = {
   httpOnly: boolean;
   secure: boolean;
   sameSite: "no_restriction" | "lax" | "strict" | "unspecified";
+  /**
+   * Read from `document.cookie` rather than the cookie store, which exposes
+   * only names and values. Everything below `value` is then unknown rather
+   * than false, and the panel renders those columns blank instead of stating
+   * a default it cannot vouch for.
+   */
+  partial?: boolean;
 };
+
+/** Where a cookie listing came from, so the panel can say so. */
+export type CookieSource = "store" | "document";
 
 export type GetCookiesResponse = {
   ok: boolean;
@@ -89,6 +119,10 @@ export type GetCookiesResponse = {
   /** False when the per-site host permission has not been granted. */
   granted?: boolean;
   error?: string;
+  /** "document" when this came from the page instead of the cookie store. */
+  source?: CookieSource;
+  /** Why the cookie store was unreachable, when the page answered instead. */
+  fallbackReason?: string;
 };
 
 export const REQUEST_COOKIE_ACCESS_MESSAGE =
@@ -329,7 +363,7 @@ const NETWORK_EVENT_PREFIX = "inspector-lab-network:";
  * The event name doubles as an unguessable channel token: page scripts that
  * never see it can neither eavesdrop on captured entries nor spoof them.
  */
-function randomChannelToken(): string {
+export function randomChannelToken(): string {
   return typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>

@@ -13,6 +13,7 @@ import {
   devtoolsMono,
 } from "~injected/devtools.styled";
 import { HOST_ID, STATE_STYLE_ID, truncate } from "~injected/inspector-dom";
+import { describeSendFailure, sendRuntimeMessage } from "~lib/runtime-message";
 import {
   tokenizeLines,
   type SourceLanguage,
@@ -64,9 +65,8 @@ async function loadExternalSource(url: string): Promise<FetchedSource> {
 
   try {
     const request: FetchSourceRequest = { type: FETCH_SOURCE_MESSAGE, url };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      FetchSourceResponse | undefined;
-    if (response?.ok && typeof response.content === "string") {
+    const response = await sendRuntimeMessage<FetchSourceResponse>(request);
+    if (response.ok && typeof response.content === "string") {
       return {
         state: "ready",
         content: response.content,
@@ -75,10 +75,10 @@ async function loadExternalSource(url: string): Promise<FetchedSource> {
     }
     return {
       state: "error",
-      error: response?.error ?? "The file could not be fetched.",
+      error: response.error ?? "The file could not be fetched.",
     };
-  } catch {
-    return { state: "error", error: "The file could not be fetched." };
+  } catch (error) {
+    return { state: "error", error: describeSendFailure(error) };
   }
 }
 

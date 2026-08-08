@@ -95,6 +95,20 @@ import {
   type TrackInspectorResponse,
   type WebRequestEntry,
 } from "~lib/messages";
+import {
+  RuntimeMessageError,
+  describeSendFailure,
+  isRuntimeGone,
+  sendRuntimeMessage,
+} from "~lib/runtime-message";
+import { PageBridgeError, installPageBridge } from "~lib/page-bridge-client";
+import type { PageBridgeHook } from "~lib/page-bridge-protocol";
+import {
+  clearPageCookies,
+  deletePageCookie,
+  readPageCookies,
+  writePageCookie,
+} from "~lib/page-cookies";
 import { ElementsPanel } from "~injected/panels/elements-panel";
 import {
   ConsolePanel,
@@ -114,6 +128,8 @@ const MIN_HEIGHT = 320;
 const VIEWPORT_GUTTER = 12;
 /** Oldest console entries are dropped past this point, as DevTools also caps. */
 const MAX_CONSOLE_ENTRIES = 1000;
+/** Evaluation preview cap, matching the background's own PREVIEW_LIMIT. */
+const PREVIEW_LIMIT = 2000;
 
 const MIN_DOCK_WIDTH = 320;
 const MIN_DOCK_HEIGHT = 160;
@@ -383,51 +399,111 @@ function suppressPageSelection(): () => void {
 }
 
 /**
- * Console evaluation runs in the page's MAIN world, which only the background
- * service worker can reach (chrome.scripting is not available here). If the
- * extension was reloaded since injection, the runtime link is dead and
- * sendMessage throws — surface that instead of failing silently.
+ * Set once a cookie read has proved the background cannot be reached, so the
+ * writes that follow go straight to the page instead of waiting out a timeout
+ * each. Reads set it; writes only ever consult it.
+ *
+ * A write never sets it on its own. "The background did not respond" does not
+ * mean the message never arrived — it may have run and only lost its reply —
+ * and a cookie deletion or rename must not be replayed against the page on that
+ * evidence alone.
  */
+let cookieStoreUnreachable: { reason: string; runtimeGone: boolean } | null =
+  null;
+
+function noteCookieStoreUnreachable(error: unknown): string {
+  const reason = describeSendFailure(error);
+  cookieStoreUnreachable = { reason, runtimeGone: isRuntimeGone(error) };
+  return reason;
+}
+
+/**
+ * Console evaluation runs in the page's MAIN world, which this realm cannot
+ * touch: chrome.scripting is not available here, so the background does it.
+ *
+ * Where the background cannot be reached — a runtime that went away, or a
+ * browser whose extension APIs do not stretch this far — the page bridge runs
+ * the same evaluator as an ordinary page script instead. Once that has been
+ * needed, it stays the route, so later commands do not each wait out a timeout
+ * first.
+ */
+let evaluateViaPage = false;
+/** The transport error that pushed evaluation onto the bridge, kept so a
+ *  failing bridge can report the root cause instead of only its own. */
+let evalTransportError: unknown = null;
+
 async function evaluateExpression(
   expression: string,
 ): Promise<EvaluateResponse> {
-  try {
-    const request: EvaluateRequest = { type: EVALUATE_MESSAGE, expression };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      EvaluateResponse | undefined;
-    if (!response || typeof response.preview !== "string") {
-      throw new Error("empty response");
+  if (!evaluateViaPage) {
+    try {
+      const request: EvaluateRequest = { type: EVALUATE_MESSAGE, expression };
+      const response = await sendRuntimeMessage<EvaluateResponse>(request);
+      if (typeof response.preview !== "string") {
+        throw new RuntimeMessageError("the background sent no result");
+      }
+      return response;
+    } catch (error) {
+      // The bridge is attempted whatever the failure, including a runtime
+      // that has gone away entirely — it carries its own source, so it needs
+      // nothing from the extension. Whether it can actually run depends on
+      // the world this script is in: Chrome's isolated-world CSP blocks a
+      // content script from injecting page scripts, so an orphaned inspector
+      // on Chrome falls through to the error below; a WebKit content world
+      // (Orion) does not impose that, which is the case the bridge exists for.
+      evaluateViaPage = true;
+      evalTransportError = error;
     }
-    return response;
-  } catch {
+  }
+
+  try {
+    const bridge = await installPageBridge();
+    return await bridge.evaluate(expression, PREVIEW_LIMIT);
+  } catch (error) {
+    // The bridge could not run at all. A dead extension link is the more
+    // actionable diagnosis — relaunching fixes it — so it wins the message.
+    if (isRuntimeGone(evalTransportError)) {
+      return { ok: false, preview: describeSendFailure(evalTransportError) };
+    }
     return {
       ok: false,
       preview:
-        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+        error instanceof PageBridgeError
+          ? error.message
+          : "Could not evaluate in this page.",
     };
   }
 }
 
 /**
  * Cookie access lives behind chrome.cookies in the background (only it holds
- * the "cookies" permission); the same dead-runtime caveat as evaluation
- * applies, so failures surface as messages instead of silent empty lists.
+ * the "cookies" permission). When that cannot be reached, `document.cookie`
+ * answers instead: a strictly smaller view — no HttpOnly cookies, no flags —
+ * which the panel labels rather than passing off as the real thing.
+ *
+ * A refused grant is not a transport failure and must not trigger the fallback:
+ * the panel's own prompt is the fix for that, and it works.
  */
 async function loadCookies(scope: CookieScope): Promise<GetCookiesResponse> {
   try {
     const request: GetCookiesRequest = { type: GET_COOKIES_MESSAGE, scope };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      GetCookiesResponse | undefined;
-    if (!response || !Array.isArray(response.cookies)) {
-      throw new Error("empty response");
+    // Reads re-probe the store every time so a background that comes back is
+    // picked up — but once it has failed, with a short leash, so refreshing
+    // the panel does not stall for the full default timeout on every load.
+    const response = await sendRuntimeMessage<GetCookiesResponse>(request, {
+      ...(cookieStoreUnreachable ? { timeoutMs: 1_500 } : {}),
+    });
+    if (!Array.isArray(response.cookies)) {
+      throw new RuntimeMessageError("the background sent no cookie list");
     }
-    return response;
-  } catch {
+    cookieStoreUnreachable = null;
+    return { ...response, source: "store" };
+  } catch (error) {
     return {
-      ok: false,
-      cookies: [],
-      error:
-        "The inspector lost its connection to the extension. Reload the page and launch it again.",
+      ok: true,
+      cookies: readPageCookies(),
+      source: "document",
+      fallbackReason: noteCookieStoreUnreachable(error),
     };
   }
 }
@@ -435,6 +511,8 @@ async function loadCookies(scope: CookieScope): Promise<GetCookiesResponse> {
 async function deleteCookie(
   cookie: CookieEntry,
 ): Promise<DeleteCookieResponse> {
+  if (cookieStoreUnreachable) return deletePageCookie(cookie);
+
   try {
     const request: DeleteCookieRequest = {
       type: DELETE_COOKIE_MESSAGE,
@@ -443,16 +521,9 @@ async function deleteCookie(
       path: cookie.path,
       secure: cookie.secure,
     };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      DeleteCookieResponse | undefined;
-    if (!response) throw new Error("empty response");
-    return response;
-  } catch {
-    return {
-      ok: false,
-      error:
-        "The inspector lost its connection to the extension. Reload the page and launch it again.",
-    };
+    return await sendRuntimeMessage<DeleteCookieResponse>(request);
+  } catch (error) {
+    return { ok: false, error: describeSendFailure(error) };
   }
 }
 
@@ -460,6 +531,10 @@ async function saveCookie(
   original: CookieEntry | null,
   next: CookieDraft,
 ): Promise<SetCookieResponse> {
+  if (cookieStoreUnreachable) {
+    return writePageCookie(original?.name ?? null, next);
+  }
+
   try {
     const request: SetCookieRequest = {
       type: SET_COOKIE_MESSAGE,
@@ -472,34 +547,22 @@ async function saveCookie(
       },
       next,
     };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      SetCookieResponse | undefined;
-    if (!response) throw new Error("empty response");
-    return response;
-  } catch {
-    return {
-      ok: false,
-      error:
-        "The inspector lost its connection to the extension. Reload the page and launch it again.",
-    };
+    return await sendRuntimeMessage<SetCookieResponse>(request);
+  } catch (error) {
+    return { ok: false, error: describeSendFailure(error) };
   }
 }
 
 async function clearSiteCookies(): Promise<ClearSiteCookiesResponse> {
+  if (cookieStoreUnreachable) return clearPageCookies();
+
   try {
     const request: ClearSiteCookiesRequest = {
       type: CLEAR_SITE_COOKIES_MESSAGE,
     };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      ClearSiteCookiesResponse | undefined;
-    if (!response) throw new Error("empty response");
-    return response;
-  } catch {
-    return {
-      ok: false,
-      error:
-        "The inspector lost its connection to the extension. Reload the page and launch it again.",
-    };
+    return await sendRuntimeMessage<ClearSiteCookiesResponse>(request);
+  } catch (error) {
+    return { ok: false, error: describeSendFailure(error) };
   }
 }
 
@@ -509,10 +572,8 @@ async function clearSiteCookies(): Promise<ClearSiteCookiesResponse> {
  * prehook registered. `activeTab` persists the active panel per site; an
  * open call without it gets the site's remembered panel echoed back.
  * Best-effort: a dead extension runtime resolves to undefined, never throws.
- * The try/catch is not redundant with `.catch()` — a runtime that has gone away
- * can make sendMessage throw synchronously instead of rejecting, and every
- * caller here is a React effect, where an escaping throw unmounts the whole
- * inspector rather than costing one message.
+ * Every caller here is a React effect, where an escaping throw unmounts the
+ * whole inspector rather than costing one message.
  */
 function trackInspector(
   open: boolean,
@@ -523,13 +584,9 @@ function trackInspector(
     open,
     ...(activeTab !== undefined ? { activeTab } : {}),
   };
-  try {
-    return chrome.runtime
-      .sendMessage(request)
-      .catch(() => undefined) as Promise<TrackInspectorResponse | undefined>;
-  } catch {
-    return Promise.resolve(undefined);
-  }
+  return sendRuntimeMessage<TrackInspectorResponse>(request).catch(
+    () => undefined,
+  );
 }
 
 /** Oldest network captures are dropped past this point, as rows are cheap
@@ -592,15 +649,34 @@ function reduceNetworkCapture(
   return next;
 }
 
+/**
+ * Installs the page bridge and points one capture hook at its channel, for
+ * when the background could not do it. Returns false when the page refuses the
+ * bridge — a strict Content Security Policy, most often — which leaves the
+ * panel to say capture is unavailable, as it did before.
+ */
+async function connectCaptureViaPage(
+  hook: PageBridgeHook,
+  eventName: string,
+): Promise<boolean> {
+  try {
+    const bridge = await installPageBridge();
+    bridge.connect(hook, eventName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Pulls the background's headers-only webRequest log for this tab. */
 async function loadHeaderDetails(): Promise<WebRequestEntry[]> {
   try {
     const request: GetNetworkDetailsRequest = {
       type: GET_NETWORK_DETAILS_MESSAGE,
     };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      GetNetworkDetailsResponse | undefined;
-    return response?.ok && Array.isArray(response.entries)
+    const response =
+      await sendRuntimeMessage<GetNetworkDetailsResponse>(request);
+    return response.ok && Array.isArray(response.entries)
       ? response.entries
       : [];
   } catch {
@@ -616,16 +692,9 @@ async function requestCookieAccess(
       type: REQUEST_COOKIE_ACCESS_MESSAGE,
       scope,
     };
-    const response = (await chrome.runtime.sendMessage(request)) as
-      RequestCookieAccessResponse | undefined;
-    if (!response) throw new Error("empty response");
-    return response;
-  } catch {
-    return {
-      ok: false,
-      error:
-        "The inspector lost its connection to the extension. Reload the page and launch it again.",
-    };
+    return await sendRuntimeMessage<RequestCookieAccessResponse>(request);
+  } catch (error) {
+    return { ok: false, error: describeSendFailure(error) };
   }
 }
 
@@ -765,15 +834,19 @@ function Inspector({ host }: { host: HTMLElement }) {
     };
     void (async () => {
       try {
-        const response = (await chrome.runtime.sendMessage(request)) as
-          InterceptConsoleResponse | undefined;
-        if (!response?.ok) throw new Error("rejected");
+        const response =
+          await sendRuntimeMessage<InterceptConsoleResponse>(request);
+        if (!response.ok) throw new Error("rejected");
+        return;
       } catch {
-        log(
-          "warning",
-          "console.log capture is unavailable; page logs stay in the browser console.",
-        );
+        /* Fall through to the page bridge below. */
       }
+
+      if (await connectCaptureViaPage("console", eventName)) return;
+      log(
+        "warning",
+        "console.log capture is unavailable; page logs stay in the browser console.",
+      );
     })();
 
     return () => document.removeEventListener(eventName, onCaptured);
@@ -810,15 +883,19 @@ function Inspector({ host }: { host: HTMLElement }) {
     };
     void (async () => {
       try {
-        const response = (await chrome.runtime.sendMessage(request)) as
-          InterceptNetworkResponse | undefined;
-        if (!response?.ok) throw new Error("rejected");
+        const response =
+          await sendRuntimeMessage<InterceptNetworkResponse>(request);
+        if (!response.ok) throw new Error("rejected");
+        return;
       } catch {
-        log(
-          "warning",
-          "Live network capture is unavailable; the Network tab will show the Performance timeline only.",
-        );
+        /* Fall through to the page bridge below. */
       }
+
+      if (await connectCaptureViaPage("network", eventName)) return;
+      log(
+        "warning",
+        "Live network capture is unavailable; the Network tab will show the Performance timeline only.",
+      );
     })();
 
     return () => document.removeEventListener(eventName, onCaptured);
