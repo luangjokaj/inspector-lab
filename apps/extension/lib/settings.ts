@@ -5,6 +5,34 @@
  * `=== true` keeps any malformed value from flipping a feature on.
  */
 
+/**
+ * Subscribes to storage changes, tolerating a browser that does not implement
+ * chrome.storage.onChanged. Both watchers below are called from a React effect
+ * in the injected inspector, and an effect that throws takes the whole tree
+ * down with it — React unmounts the root when no error boundary catches — so
+ * an absent namespace here would blank the inspector rather than merely cost
+ * it live theme updates. Returns a cleanup function in every case.
+ */
+function watchStorage(
+  listener: (
+    changes: Record<string, chrome.storage.StorageChange>,
+    area: string,
+  ) => void,
+): () => void {
+  try {
+    chrome.storage.onChanged.addListener(listener);
+  } catch {
+    return () => undefined;
+  }
+  return () => {
+    try {
+      chrome.storage.onChanged.removeListener(listener);
+    } catch {
+      /* Nothing was ever registered. */
+    }
+  };
+}
+
 export const CUSTOM_THEME_STORAGE_KEY = "customInspectorTheme";
 
 /** True when the inspector should use the extension's own branding instead of
@@ -44,8 +72,7 @@ export function watchCustomThemeSetting(
     const change = changes[CUSTOM_THEME_STORAGE_KEY];
     if (change) onChange(change.newValue !== false);
   };
-  chrome.storage.onChanged.addListener(listener);
-  return () => chrome.storage.onChanged.removeListener(listener);
+  return watchStorage(listener);
 }
 
 export const COLOR_SCHEME_STORAGE_KEY = "inspectorColorScheme";
@@ -95,6 +122,5 @@ export function watchColorSchemeSetting(
         : null,
     );
   };
-  chrome.storage.onChanged.addListener(listener);
-  return () => chrome.storage.onChanged.removeListener(listener);
+  return watchStorage(listener);
 }

@@ -1,10 +1,12 @@
 import {
+  Component,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
 import styled, {
@@ -479,6 +481,10 @@ async function clearSiteCookies(): Promise<ClearSiteCookiesResponse> {
  * prehook registered. `activeTab` persists the active panel per site; an
  * open call without it gets the site's remembered panel echoed back.
  * Best-effort: a dead extension runtime resolves to undefined, never throws.
+ * The try/catch is not redundant with `.catch()` — a runtime that has gone away
+ * can make sendMessage throw synchronously instead of rejecting, and every
+ * caller here is a React effect, where an escaping throw unmounts the whole
+ * inspector rather than costing one message.
  */
 function trackInspector(
   open: boolean,
@@ -489,9 +495,13 @@ function trackInspector(
     open,
     ...(activeTab !== undefined ? { activeTab } : {}),
   };
-  return chrome.runtime.sendMessage(request).catch(() => undefined) as Promise<
-    TrackInspectorResponse | undefined
-  >;
+  try {
+    return chrome.runtime
+      .sendMessage(request)
+      .catch(() => undefined) as Promise<TrackInspectorResponse | undefined>;
+  } catch {
+    return Promise.resolve(undefined);
+  }
 }
 
 /** Oldest network captures are dropped past this point, as rows are cheap
@@ -588,6 +598,19 @@ async function requestCookieAccess(
       error:
         "The inspector lost its connection to the extension. Reload the page and launch it again.",
     };
+  }
+}
+
+/**
+ * The manifest version for the About card, or empty on a runtime that has gone
+ * away. This one is read during render, where a throw is as fatal as one in an
+ * effect.
+ */
+function manifestVersion(): string {
+  try {
+    return chrome.runtime.getManifest().version;
+  } catch {
+    return "";
   }
 }
 
@@ -809,7 +832,10 @@ function Inspector({ host }: { host: HTMLElement }) {
   }, [dock, dockHeight, dockWidth, frame, host]);
 
   useEffect(() => {
-    const show = () => {
+    const show = (event: Event) => {
+      // Answering the event is also the liveness signal bootstrap() and the
+      // popup use to tell a running inspector from an empty host element.
+      event.preventDefault();
       host.style.display = "block";
       // Re-opening re-arms persistence and rebuilds the state stylesheet.
       trackInspector(true);
@@ -1644,7 +1670,9 @@ function Inspector({ host }: { host: HTMLElement }) {
             <AboutHeader>
               <strong>
                 Inspector Lab - DevTools{" "}
-                <AboutMuted>v{chrome.runtime.getManifest().version}</AboutMuted>
+                {manifestVersion() && (
+                  <AboutMuted>v{manifestVersion()}</AboutMuted>
+                )}
               </strong>
               <ToolbarControls>
                 <IconButton
@@ -1774,11 +1802,72 @@ function InspectorRoot({ host }: { host: HTMLElement }) {
   );
 }
 
+/**
+ * Keeps one unsupported browser API from taking the window down with it.
+ * React unmounts the entire root when an error escapes render or an effect and
+ * no boundary catches it, so on a reduced-API browser a single missing
+ * namespace turns "this panel cannot work here" into an inspector that paints
+ * once and vanishes — with the host element left behind as an empty shell.
+ *
+ * The fallback is deliberately inline-styled: it has to render even when the
+ * failure was in resolving the theme itself.
+ */
+class InspectorErrorBoundary extends Component<
+  { children: ReactNode },
+  { message: string | null }
+> {
+  state: { message: string | null } = { message: null };
+
+  static getDerivedStateFromError(error: unknown): { message: string } {
+    return {
+      message:
+        error instanceof Error && error.message
+          ? error.message
+          : "An unexpected error stopped the inspector.",
+    };
+  }
+
+  render() {
+    if (this.state.message === null) return this.props.children;
+    return (
+      <div
+        role="alert"
+        style={{
+          boxSizing: "border-box",
+          width: "100%",
+          height: "100%",
+          padding: "12px 14px",
+          overflow: "auto",
+          color: "#e8eaed",
+          font: "13px/1.5 system-ui, -apple-system, sans-serif",
+          background: "#202124",
+          border: "solid 1px #3c4043",
+        }}
+      >
+        <strong>Inspector Lab could not start on this page.</strong>
+        <p style={{ margin: "8px 0 0" }}>{this.state.message}</p>
+        <p style={{ margin: "8px 0 0", color: "#9aa0a6" }}>
+          This browser may not support something the inspector needs. Reload the
+          page and launch it again to retry.
+        </p>
+      </div>
+    );
+  }
+}
+
 function bootstrap() {
   const existing = document.getElementById(HOST_ID);
   if (existing) {
-    existing.dispatchEvent(new Event(SHOW_EVENT));
-    return;
+    // A live tree answers by calling preventDefault (see the SHOW_EVENT
+    // handler). An unanswered dispatch means the React root is gone while its
+    // host element survives — an empty shell that would otherwise make the
+    // inspector impossible to reopen on this page, because every relaunch path
+    // stops at "the host exists, so it must be running". Rebuild instead.
+    const handled = !existing.dispatchEvent(
+      new Event(SHOW_EVENT, { cancelable: true }),
+    );
+    if (handled) return;
+    existing.remove();
   }
 
   const host = document.createElement("div");
@@ -1804,7 +1893,9 @@ function bootstrap() {
 
   root.render(
     <StyleSheetManager target={styleTarget}>
-      <InspectorRoot host={host} />
+      <InspectorErrorBoundary>
+        <InspectorRoot host={host} />
+      </InspectorErrorBoundary>
     </StyleSheetManager>,
   );
 }

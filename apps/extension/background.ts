@@ -99,12 +99,72 @@ async function ensurePrehookRegistered(origin: string): Promise<void> {
 }
 
 /**
+ * chrome.storage.session is not universally implemented — Orion on iOS ships a
+ * reduced API surface, and reading `.get` off an absent namespace throws at
+ * module scope, which would stop this file before the listeners below are
+ * registered. That is the same hazard the webRequest guard covers, with a wider
+ * blast radius: no onMessage listener means every panel goes silent, not just
+ * the Network one. A `.catch()` cannot help, because the throw happens while
+ * building the call, before any promise exists.
+ *
+ * The in-memory mirror keeps open-tab tracking and reload persistence working
+ * where the namespace is missing. Session storage only promises to live as long
+ * as the browser session anyway, so a Map that dies with the service worker is
+ * a narrower version of the same contract, not a different one.
+ */
+const memorySession = new Map<string, unknown>();
+
+const nativeSession = ((): chrome.storage.StorageArea | null => {
+  try {
+    return chrome.storage?.session ?? null;
+  } catch {
+    return null;
+  }
+})();
+
+const sessionStore = {
+  async get(key: string | null): Promise<Record<string, unknown>> {
+    if (nativeSession) {
+      try {
+        return (await nativeSession.get(key)) as Record<string, unknown>;
+      } catch {
+        /* Present but failing: fall back to the mirror below. */
+      }
+    }
+    if (key === null) return Object.fromEntries(memorySession);
+    return memorySession.has(key) ? { [key]: memorySession.get(key) } : {};
+  },
+  async set(items: Record<string, unknown>): Promise<void> {
+    for (const [key, value] of Object.entries(items)) {
+      memorySession.set(key, value);
+    }
+    if (nativeSession) {
+      try {
+        await nativeSession.set(items);
+      } catch {
+        /* The mirror already holds it. */
+      }
+    }
+  },
+  async remove(key: string): Promise<void> {
+    memorySession.delete(key);
+    if (nativeSession) {
+      try {
+        await nativeSession.remove(key);
+      } catch {
+        /* The mirror already dropped it. */
+      }
+    }
+  },
+};
+
+/**
  * Mirror of the open-tab set for synchronous checks in webRequest listeners
  * (storage.session is async). Rehydrated on service-worker start; kept in
  * sync by the TRACK handler and tabs.onRemoved.
  */
 const openTabIds = new Set<number>();
-void chrome.storage.session
+void sessionStore
   .get(null)
   .then((all) => {
     for (const key of Object.keys(all)) {
@@ -222,7 +282,7 @@ if (chrome.webRequest) {
 
 /** Drops an origin's prehook registration once no open tab needs it. */
 async function unregisterPrehookIfUnused(origin: string): Promise<void> {
-  const all = await chrome.storage.session.get(null);
+  const all = await sessionStore.get(null);
   const stillUsed = Object.entries(all).some(
     ([key, value]) => key.startsWith("openTab:") && value === origin,
   );
@@ -242,7 +302,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== "complete") return;
   void (async () => {
     const key = openTabKey(tabId);
-    const stored = await chrome.storage.session.get(key);
+    const stored = await sessionStore.get(key);
     if (!stored[key]) return;
     try {
       await chrome.scripting.executeScript({
@@ -260,10 +320,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   webRequestLog.delete(tabId);
   void (async () => {
     const key = openTabKey(tabId);
-    const stored = await chrome.storage.session.get(key);
+    const stored = await sessionStore.get(key);
     const origin = stored[key] as string | undefined;
     if (origin === undefined) return;
-    await chrome.storage.session.remove(key);
+    await sessionStore.remove(key);
     await unregisterPrehookIfUnused(origin).catch(() => undefined);
   })();
 });
@@ -1104,7 +1164,7 @@ chrome.runtime.onMessage.addListener(
             }
             const origin = new URL(tabUrl).origin;
             openTabIds.add(tabId);
-            await chrome.storage.session.set({ [openTabKey(tabId)]: origin });
+            await sessionStore.set({ [openTabKey(tabId)]: origin });
             await ensurePrehookRegistered(origin).catch(() => undefined);
 
             // Panel-tab memory, per origin: a panel switch stores the name;
@@ -1113,12 +1173,12 @@ chrome.runtime.onMessage.addListener(
               typeof request.activeTab === "string" &&
               request.activeTab.length <= 32
             ) {
-              await chrome.storage.session.set({
+              await sessionStore.set({
                 [panelKey(origin)]: request.activeTab,
               });
               sendResponse({ ok: true } satisfies TrackInspectorResponse);
             } else {
-              const stored = await chrome.storage.session.get(panelKey(origin));
+              const stored = await sessionStore.get(panelKey(origin));
               const activeTab = stored[panelKey(origin)];
               sendResponse({
                 ok: true,
@@ -1128,9 +1188,9 @@ chrome.runtime.onMessage.addListener(
           } else {
             openTabIds.delete(tabId);
             const key = openTabKey(tabId);
-            const stored = await chrome.storage.session.get(key);
+            const stored = await sessionStore.get(key);
             const origin = stored[key] as string | undefined;
-            await chrome.storage.session.remove(key);
+            await sessionStore.remove(key);
             if (origin !== undefined) await unregisterPrehookIfUnused(origin);
             sendResponse({ ok: true } satisfies TrackInspectorResponse);
           }

@@ -158,8 +158,12 @@ const INSPECTOR_SHOW_EVENT = "inspector-lab:show";
 function revealExistingInspector(hostId: string, showEvent: string): boolean {
   const host = document.getElementById(hostId);
   if (!host) return false;
-  host.dispatchEvent(new Event(showEvent));
-  return true;
+  // A running inspector answers by calling preventDefault. A host element left
+  // behind by a mount that died answers nothing, and reporting it as revealed
+  // would leave the page permanently unable to reopen the inspector: returning
+  // false sends the caller down the inject path, where bootstrap() replaces the
+  // dead shell.
+  return !host.dispatchEvent(new Event(showEvent, { cancelable: true }));
 }
 
 function inspectorHostExists(hostId: string): boolean {
