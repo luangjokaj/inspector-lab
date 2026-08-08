@@ -162,6 +162,10 @@ function revealExistingInspector(hostId: string, showEvent: string): boolean {
   return true;
 }
 
+function inspectorHostExists(hostId: string): boolean {
+  return document.getElementById(hostId) !== null;
+}
+
 /**
  * Fast path for a tab that already has the inspector: re-show it without
  * re-evaluating the bundle. False means "not revealed, inject it" — including
@@ -182,6 +186,31 @@ async function revealInspector(tabId: number): Promise<boolean> {
     return existing?.result === true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Confirms the freshly injected bundle actually mounted. executeScript resolves
+ * once the file has been evaluated, and bootstrap() appends the host element
+ * synchronously before any async work, so by this point the host is either
+ * there or the bundle threw on its way up — which executeScript itself does not
+ * report, since the injection succeeded and the throw stayed in the page.
+ *
+ * Only an explicit false counts as a failure. A browser that cannot run the
+ * func form of executeScript keeps the old assume-success behavior rather than
+ * gaining a false negative, which matters most on a tablet with no console to
+ * check the claim against.
+ */
+async function confirmInspectorMounted(tabId: number): Promise<boolean> {
+  try {
+    const [check] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: inspectorHostExists,
+      args: [INSPECTOR_HOST_ID],
+    });
+    return check?.result !== false;
+  } catch {
+    return true;
   }
 }
 
@@ -268,6 +297,12 @@ function Popup() {
           target: { tabId: tab.id },
           files: [toExtensionPath(inspectorBundleUrl)],
         });
+
+        if (!(await confirmInspectorMounted(tab.id))) {
+          throw new Error(
+            "The inspector was injected but did not start on this page. This browser may not support everything it needs.",
+          );
+        }
       }
 
       setLaunchState("success");
