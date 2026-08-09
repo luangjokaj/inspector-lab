@@ -5,6 +5,7 @@ import {
   Callout,
   Flex,
   Icon,
+  IconButton,
   ThemeToggle,
   Toggle,
   alpha,
@@ -220,38 +221,59 @@ const Feature = styled.li`
 `;
 
 /**
- * The diagnostics log rendered as text. The popup is a separate document that
- * survives the inspected page's death, which makes this the one "console"
- * available on an iPad: crashes recorded by the background's session sweep
- * and uncaught extension errors both surface here.
+ * The diagnostics log rendered as a DevTools-style console. The popup is a
+ * separate document that survives the inspected page's death, which makes
+ * this the one "console" available on an iPad: crashes recorded by the
+ * background's session sweep and uncaught extension errors both surface
+ * here — so entries get the console treatment (level icon, hairline row
+ * dividers, error rows tinted with the theme's error color) instead of a
+ * plain list.
  */
-const DiagnosticsList = styled.ol`
-  display: grid;
-  gap: ${({ theme }) => theme.spacing.radius.xs};
+const ConsoleLog = styled.ol`
   margin: 0;
-  padding: ${({ theme }) => theme.spacing.radius.xs};
+  padding: 0;
   list-style: none;
-  max-height: 180px;
+  max-height: 200px;
   overflow: auto;
   border: solid 1px ${({ theme }) => theme.colors.grayLight};
   border-radius: ${({ theme }) => theme.spacing.radius.xs};
+  background: ${({ theme }) => theme.colors.light};
 `;
 
-const DiagnosticItem = styled.li<{ $level: DiagnosticEntry["level"] }>`
+const ConsoleRow = styled.li<{ $level: DiagnosticEntry["level"] }>`
   ${({ theme }) => styledSmall(theme)};
   font-family: ${({ theme }) => theme.fonts.mono};
+  display: flex;
+  align-items: flex-start;
+  gap: ${({ theme }) => theme.spacing.radius.xs};
+  padding: ${({ theme }) => theme.spacing.radius.xs};
+  overflow-wrap: anywhere;
   color: ${({ theme, $level }) =>
     $level === "error" ? theme.colors.error : theme.colors.grayDark};
-  overflow-wrap: anywhere;
+  background: ${({ theme, $level }) =>
+    $level === "error" ? alpha(theme.colors.error, 8) : "transparent"};
+
+  &:not(:last-child) {
+    border-bottom: solid 1px ${({ theme }) => theme.colors.grayLight};
+  }
+
+  svg {
+    flex-shrink: 0;
+    /* Optically align the level icon with the first line of mono text. */
+    margin-top: 2px;
+  }
 `;
 
-const DiagnosticMeta = styled.span`
+const ConsoleMessage = styled.span`
+  min-width: 0;
+`;
+
+const ConsoleMeta = styled.span`
   color: ${({ theme }) => theme.colors.gray};
 `;
 
-const EmptyDiagnostics = styled.p`
+const DiagnosticsLabel = styled.span`
   ${({ theme }) => styledSmall(theme)};
-  margin: 0;
   color: ${({ theme }) => theme.colors.grayDark};
 `;
 
@@ -516,17 +538,23 @@ function Popup() {
         )}
 
         <Flex $alignItems="center" $justifyContent="space-between" $gap={12}>
-          <Button
-            $size="small"
-            $outline
-            $icon={<Icon name="ScrollText" />}
-            aria-expanded={diagnosticsOpen}
-            onClick={toggleDiagnostics}
-          >
-            {diagnosticsOpen
-              ? "Hide diagnostics"
-              : `Diagnostics${diagnostics.length > 0 ? ` (${diagnostics.length})` : ""}`}
-          </Button>
+          <Flex $alignItems="center" $gap={8}>
+            <IconButton
+              aria-label={
+                diagnosticsOpen ? "Hide diagnostics" : "Show diagnostics"
+              }
+              title={diagnosticsOpen ? "Hide diagnostics" : "Show diagnostics"}
+              aria-expanded={diagnosticsOpen}
+              $active={diagnosticsOpen}
+              onClick={toggleDiagnostics}
+            >
+              <Icon name="ScrollText" />
+            </IconButton>
+            <DiagnosticsLabel>
+              Diagnostics
+              {diagnostics.length > 0 ? ` (${diagnostics.length})` : ""}
+            </DiagnosticsLabel>
+          </Flex>
           {diagnosticsOpen && diagnostics.length > 0 && (
             <Flex $gap={12}>
               <Button $size="small" $outline onClick={copyDiagnostics}>
@@ -541,24 +569,27 @@ function Popup() {
 
         {diagnosticsOpen &&
           (diagnostics.length > 0 ? (
-            <DiagnosticsList aria-label="Diagnostics log">
+            <ConsoleLog aria-label="Diagnostics log">
               {[...diagnostics].reverse().map((entry, index) => (
-                <DiagnosticItem
-                  key={`${entry.time}-${index}`}
-                  $level={entry.level}
-                >
-                  <DiagnosticMeta>
-                    {new Date(entry.time).toLocaleString()} · {entry.source}
-                  </DiagnosticMeta>{" "}
-                  {entry.message}
-                </DiagnosticItem>
+                <ConsoleRow key={`${entry.time}-${index}`} $level={entry.level}>
+                  <Icon
+                    name={entry.level === "error" ? "CircleX" : "Info"}
+                    size={14}
+                  />
+                  <ConsoleMessage>
+                    <ConsoleMeta>
+                      {new Date(entry.time).toLocaleString()} · {entry.source}
+                    </ConsoleMeta>{" "}
+                    {entry.message}
+                  </ConsoleMessage>
+                </ConsoleRow>
               ))}
-            </DiagnosticsList>
+            </ConsoleLog>
           ) : (
-            <EmptyDiagnostics>
+            <Callout $type="note">
               No diagnostics recorded. Extension errors and sessions that end
               without a clean close will show up here.
-            </EmptyDiagnostics>
+            </Callout>
           ))}
       </PopupShell>
     </ThemeProvider>
