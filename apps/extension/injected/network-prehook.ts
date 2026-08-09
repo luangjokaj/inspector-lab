@@ -36,7 +36,10 @@ export type NetworkHookState = {
   holder.__inspectorLabNetworkHook = state;
 
   let sequence = 0;
-  const nextId = () => `net-${Date.now().toString(36)}-${(sequence += 1)}`;
+  const nextId = () => {
+    sequence += 1;
+    return `net-${Date.now().toString(36)}-${sequence}`;
+  };
 
   const clip = (value: string, limit: number): string =>
     value.length > limit ? value.slice(0, limit) : value;

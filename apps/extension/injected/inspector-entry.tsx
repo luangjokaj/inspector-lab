@@ -595,7 +595,9 @@ function suppressPageSelection(docs: readonly Document[]): () => void {
     };
   });
 
-  return () => undos.forEach((undo) => undo());
+  return () => {
+    for (const undo of undos) undo();
+  };
 }
 
 /**
