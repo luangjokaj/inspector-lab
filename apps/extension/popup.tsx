@@ -9,6 +9,7 @@ import {
   ThemeToggle,
   Toggle,
   alpha,
+  iconButtonStyles,
   styledSmall,
   styledText,
 } from "cherry-styled-components";
@@ -272,9 +273,23 @@ const ConsoleMeta = styled.span`
   color: ${({ theme }) => theme.colors.gray};
 `;
 
-const DiagnosticsLabel = styled.span`
+const RowLabel = styled.span`
   ${({ theme }) => styledSmall(theme)};
   color: ${({ theme }) => theme.colors.grayDark};
+`;
+
+/**
+ * External links dressed as IconButtons. Cherry's IconButton renders a
+ * <button>, and programmatic window.open is unreliable from extension
+ * popups — only a real anchor navigation dependably opens a tab there, so
+ * these reuse Cherry's iconButtonStyles on an <a>. box-sizing must be
+ * pinned: buttons are border-box by UA default, anchors are not, and
+ * without it the circle renders 4px larger than its IconButton siblings.
+ */
+const IconLink = styled.a`
+  ${({ theme }) => iconButtonStyles(theme)};
+  box-sizing: border-box;
+  text-decoration: none;
 `;
 
 type LaunchState = "idle" | "loading" | "success" | "error";
@@ -282,15 +297,6 @@ type LaunchState = "idle" | "loading" | "success" | "error";
 const REPORT_ISSUE_URL =
   "https://github.com/luangjokaj/inspector-lab/issues/new";
 const DOCS_URL = "https://inspectorlab.dev";
-
-/**
- * window.open instead of chrome.tabs.create: it behaves the same in every
- * popup runtime without touching the callback-only chrome.* surface on
- * Orion, and the popup closes itself once the new tab takes focus.
- */
-function openExternal(url: string) {
-  window.open(url, "_blank", "noopener,noreferrer");
-}
 
 const INSPECTOR_HOST_ID = "inspector-lab-extension-root";
 const INSPECTOR_SHOW_EVENT = "inspector-lab:show";
@@ -563,35 +569,43 @@ function Popup() {
             >
               <Icon name="ScrollText" />
             </IconButton>
-            <DiagnosticsLabel>
+            <RowLabel>
               Diagnostics
               {diagnostics.length > 0 ? ` (${diagnostics.length})` : ""}
-            </DiagnosticsLabel>
-            <IconButton
+            </RowLabel>
+            {diagnosticsOpen && diagnostics.length > 0 && (
+              <Flex $gap={12}>
+                <Button $size="small" $outline onClick={copyDiagnostics}>
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+                <Button $size="small" $outline onClick={onClearDiagnostics}>
+                  Clear
+                </Button>
+              </Flex>
+            )}
+          </Flex>
+          <Flex $alignItems="center" $gap={8}>
+            <IconLink
+              href={REPORT_ISSUE_URL}
+              target="_blank"
+              rel="noreferrer noopener"
               aria-label="Report an issue"
               title="Report an issue"
-              onClick={() => openExternal(REPORT_ISSUE_URL)}
             >
               <Icon name="Bug" />
-            </IconButton>
-            <IconButton
+            </IconLink>
+            <RowLabel>Report an issue</RowLabel>
+            <IconLink
+              href={DOCS_URL}
+              target="_blank"
+              rel="noreferrer noopener"
               aria-label="Docs"
               title="Docs"
-              onClick={() => openExternal(DOCS_URL)}
             >
               <Icon name="ArrowUpRight" />
-            </IconButton>
+            </IconLink>
+            <RowLabel>Docs</RowLabel>
           </Flex>
-          {diagnosticsOpen && diagnostics.length > 0 && (
-            <Flex $gap={12}>
-              <Button $size="small" $outline onClick={copyDiagnostics}>
-                {copied ? "Copied" : "Copy"}
-              </Button>
-              <Button $size="small" $outline onClick={onClearDiagnostics}>
-                Clear
-              </Button>
-            </Flex>
-          )}
         </Flex>
 
         {diagnosticsOpen &&
