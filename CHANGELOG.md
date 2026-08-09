@@ -5,7 +5,7 @@ All notable changes to Inspector Lab - DevTools are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] - 2026-08-09
 
 ### Added
 
@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel reveals a copy button (styled like the Styles pane's row actions) that
   copies the element's complete outerHTML to the clipboard, with the
   inspector's own nodes stripped and a checkmark confirmation.
+- **Report an issue and Docs links in the popup.** Two labeled icon links on
+  the Diagnostics row open the GitHub new-issue page and the documentation
+  site in a new tab — rendered as real anchors so they open reliably from
+  the popup on every browser.
 
 ## [0.1.0] - 2026-08-08
 
