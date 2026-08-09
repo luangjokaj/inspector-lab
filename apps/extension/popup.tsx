@@ -295,7 +295,7 @@ const IconLink = styled.a`
 type LaunchState = "idle" | "loading" | "success" | "error";
 
 const REPORT_ISSUE_URL =
-  "https://github.com/luangjokaj/inspector-lab/issues/new";
+  "https://github.com/luangjokaj/inspector-lab/issues/new?template=bug_report.yml";
 const DOCS_URL = "https://inspectorlab.dev";
 
 const INSPECTOR_HOST_ID = "inspector-lab-extension-root";
