@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an idea or improvement for Inspector Lab - DevTools
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A note on scope before you write: some inspections genuinely require the debugger protocol (breakpoints, profiling, CSP bypass) and are out of reach for any extension — see the boundaries at the end of [FEATURES.md](https://github.com/luangjokaj/inspector-lab/blob/main/docs/FEATURES.md). Zero telemetry and no backend are hard product constraints.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve? What is missing or frustrating today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like Inspector Lab to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or other approaches you have thought about.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that helps us understand the request — the device or browser it matters on, screenshots, links.

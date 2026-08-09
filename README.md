@@ -76,7 +76,7 @@ Inspector Lab collects nothing, transmits nothing, and has no servers: no analyt
 
 ## Contributing
 
-Issues and pull requests are welcome. If you are planning a larger change, please open an issue first to talk it through. Keep changes focused, run the checks above, and match the existing code style (Prettier is enforced).
+Issues and pull requests are welcome. If you are planning a larger change, please open an issue first to talk it through. Keep changes focused, run the checks above, and match the existing code style (Prettier is enforced). This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

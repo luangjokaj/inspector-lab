@@ -1,0 +1,91 @@
+name: Bug report
+description: Report a problem with Inspector Lab - DevTools
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Before posting, please redact anything sensitive from logs and screenshots — cookies, tokens, private URLs. Security vulnerabilities should be reported privately via [GitHub security advisories](https://github.com/luangjokaj/inspector-lab/security/advisories/new), not as public issues.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead. If a panel showed an error message, quote it exactly — it names the API or policy that refused.
+      placeholder: When I open the Network panel on ..., ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps so we can reproduce the issue.
+      placeholder: |
+        1. Open the inspector on ...
+        2. Switch to the ... panel
+        3. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser and device
+      description: Where did this happen?
+      options:
+        - Orion on iPadOS
+        - Orion on iOS (iPhone)
+        - Orion on macOS
+        - Chrome on desktop
+        - Edge, Brave, or another Chromium browser
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      description: Shown in the extensions list of your browser.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - Chrome Web Store
+        - Local build (Load unpacked / Install from File)
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the inspector is affected?
+      options:
+        - Launching (popup, injection)
+        - Elements / Styles
+        - Console
+        - Network
+        - Sources
+        - Cookies
+        - Storage
+        - Window management (drag, resize, dock)
+        - Theming
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics log
+      description: Open the extension popup, tap Diagnostics, and use the Copy button. The log is local-only and never transmitted — paste it here after redacting anything sensitive.
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser version, OS version, and the site where it happened (omit private URLs — the page type is enough).
+      placeholder: |
+        - Browser: Orion 1.x
+        - OS: iPadOS 18
+        - Site: a React SPA behind a login
