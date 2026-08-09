@@ -279,6 +279,19 @@ const DiagnosticsLabel = styled.span`
 
 type LaunchState = "idle" | "loading" | "success" | "error";
 
+const REPORT_ISSUE_URL =
+  "https://github.com/luangjokaj/inspector-lab/issues/new";
+const DOCS_URL = "https://inspectorlab.dev";
+
+/**
+ * window.open instead of chrome.tabs.create: it behaves the same in every
+ * popup runtime without touching the callback-only chrome.* surface on
+ * Orion, and the popup closes itself once the new tab takes focus.
+ */
+function openExternal(url: string) {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 const INSPECTOR_HOST_ID = "inspector-lab-extension-root";
 const INSPECTOR_SHOW_EVENT = "inspector-lab:show";
 
@@ -554,6 +567,20 @@ function Popup() {
               Diagnostics
               {diagnostics.length > 0 ? ` (${diagnostics.length})` : ""}
             </DiagnosticsLabel>
+            <IconButton
+              aria-label="Report an issue"
+              title="Report an issue"
+              onClick={() => openExternal(REPORT_ISSUE_URL)}
+            >
+              <Icon name="Bug" />
+            </IconButton>
+            <IconButton
+              aria-label="Docs"
+              title="Docs"
+              onClick={() => openExternal(DOCS_URL)}
+            >
+              <Icon name="ArrowUpRight" />
+            </IconButton>
           </Flex>
           {diagnosticsOpen && diagnostics.length > 0 && (
             <Flex $gap={12}>
