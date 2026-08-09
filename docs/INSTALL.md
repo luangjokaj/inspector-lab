@@ -1,43 +1,24 @@
-# Installing from a file
+# Installing Inspector Lab - DevTools
 
-Inspector Lab runs from a local build on every browser that supports it, with no
-store involved. This page covers all three: **Orion on iPadOS and iOS**, desktop
-Chrome and Chromium, and Orion on macOS.
+The primary way to install Inspector Lab is the **Chrome Web Store**:
 
-The iPad flow is the one worth reading closely — it is not a download-and-tap
-install, because Orion installs an extension from a folder that has to be sitting
-in its own Files location first.
+**[Inspector Lab - DevTools on the Chrome Web Store →](https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle)**
 
----
+That one listing covers every supported browser. Desktop Chrome and Chromium
+browsers install it natively, and [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html)
+installs Chrome Web Store extensions directly on iPadOS, iOS, and macOS — so
+the store is the install path on the iPad too, with no cables, zips, or file
+transfers involved. Store installs also update automatically, which sideloaded
+builds never do.
 
-## 1. Build it
-
-```bash
-git clone git@github.com:luangjokaj/inspector-lab.git
-cd inspector-lab
-pnpm install
-pnpm build
-```
-
-That writes the unpacked extension to:
-
-```
-apps/extension/build/chrome-mv3-prod/
-```
-
-That folder **is** the extension. `manifest.json` sits at its top level, which is
-what every installer below looks for.
-
-For an iPad or iPhone, make a zip as well — 1.2 MB to move instead of 6.9 MB:
-
-```bash
-pnpm package
-# -> apps/extension/build/chrome-mv3-prod.zip
-```
+Running from a local build still works on all of those browsers and is covered
+[at the end of this page](#installing-from-a-file-local-builds) — that is the
+path for development and for trying changes that have not shipped to the store
+yet.
 
 ---
 
-## 2. Orion on iPadOS and iOS
+## 1. Orion on iPadOS and iOS
 
 [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html)
 is [free for iPhone and iPad](https://orionbrowser.com/) and is the only iPad
@@ -45,41 +26,24 @@ browser that runs Chrome extensions. Install Orion first if you have not
 already — [the App Store link](https://apps.apple.com/app/id1484498200) opens
 Orion directly when tapped on the iPad.
 
-### Step 1 — Get the folder onto the iPad
-
-Orion's installer only lists folders that are already in its own Extensions
-directory, so this has to happen before you open Orion's extension screen.
-
-1. **Transfer `chrome-mv3-prod.zip` to the iPad.** AirDrop from a Mac, iCloud
-   Drive, or just download it in a browser. Anything that lands in the Files app
-   works.
-2. Open the **Files** app.
-3. Find the zip. AirDrop and browser downloads normally land in **Downloads**.
-4. **Long-press the zip → Uncompress.** You get a folder named
-   `chrome-mv3-prod` next to it.
-5. Navigate to **Browse → On My iPad → Orion → Extensions**.
-   - No **Orion** folder? Open the Orion app once, then look again — Orion
-     creates it on first launch.
-   - Orion's own file picker calls this same location **On This iPad**. Same
-     place, different label.
-6. **Move the `chrome-mv3-prod` folder into `Extensions`.** Long-press the
-   folder → **Move** → pick `Orion/Extensions`. Dragging it across in Split View
-   works too.
-
-At this point `On My iPad → Orion → Extensions → chrome-mv3-prod` exists and
-contains `manifest.json`. Nothing is installed yet.
-
-### Step 2 — Install it in Orion
+### Step 1 — Enable Chrome extensions (once)
 
 1. Open **Orion**.
-2. Tap the **three dots** (**⋯**) in the toolbar.
-3. Tap **Extensions**.
-4. Tap the **+** button in the **bottom right**.
-5. Choose **Install from File**.
-6. The folder picker opens. Select the **`chrome-mv3-prod`** folder you moved in
-   Step 1 — pick the _folder itself_, do not open it and pick a file inside.
-7. Confirm. Orion installs it, and **Inspector Lab - DevTools** appears in the
-   extensions list.
+2. Tap the **three dots** (**⋯**) in the toolbar and choose **Settings**.
+3. Scroll to the **Extensions** group and turn on **Chrome extensions**.
+
+### Step 2 — Install from the Chrome Web Store
+
+1. Tap **⋯ → Extensions**.
+2. Tap the **+** button in the **bottom right**.
+3. Install from the **Chrome Web Store**: search for
+   **Inspector Lab - DevTools**, or open
+   [the listing](https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle)
+   directly.
+4. Confirm. **Inspector Lab - DevTools** appears in the extensions list.
+
+Orion may warn about compatibility during install — the warning is
+informational and expected here; see [Troubleshooting](#troubleshooting).
 
 ### Step 3 — Use it
 
@@ -93,18 +57,6 @@ contains `manifest.json`. Nothing is installed yet.
 The inspector docks to the bottom of the page. Drag the toolbar to tear it off
 into a floating window, or use the dock buttons to pin it to another edge. It
 survives page reloads until you close it with the **X**.
-
-### Updating a sideloaded build
-
-Sideloaded extensions never auto-update. To move to a newer build:
-
-1. Delete the old `chrome-mv3-prod` folder from
-   **On My iPad → Orion → Extensions**.
-2. Drop the new one in its place.
-3. Install it again from the **+ → Install from File** flow above.
-
-Removing the old folder first matters: two folders with the same manifest name
-make the picker ambiguous.
 
 ### What to expect on iOS
 
@@ -143,25 +95,124 @@ that refused, rather than a generic connection failure.
 
 ---
 
-## 3. Desktop Chrome, Edge, Brave, and other Chromium browsers
+## 2. Desktop Chrome, Edge, Brave, and other Chromium browsers
 
-1. Build it (section 1 above).
+Open
+[the Chrome Web Store listing](https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle)
+and click **Add to Chrome** (other Chromium browsers word the same button their
+own way). That is the whole install.
+
+---
+
+## 3. Orion on macOS
+
+Orion on macOS installs Chrome Web Store extensions directly and exposes the
+fuller desktop API surface, so the same
+[store listing](https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle)
+works there: open it in Orion and install.
+
+---
+
+## Installing from a file (local builds)
+
+No store involved — for development, or for running changes that have not
+shipped to the store yet. Sideloaded builds never auto-update.
+
+### Build it
+
+```bash
+git clone git@github.com:luangjokaj/inspector-lab.git
+cd inspector-lab
+pnpm install
+pnpm build
+```
+
+That writes the unpacked extension to:
+
+```
+apps/extension/build/chrome-mv3-prod/
+```
+
+That folder **is** the extension. `manifest.json` sits at its top level, which
+is what every installer below looks for.
+
+For an iPad or iPhone, make a zip as well — 1.2 MB to move instead of 6.9 MB:
+
+```bash
+pnpm package
+# -> apps/extension/build/chrome-mv3-prod.zip
+```
+
+### Orion on iPadOS and iOS, from a file
+
+The iPad flow is the one worth reading closely — it is not a download-and-tap
+install, because Orion installs a sideloaded extension from a folder that has
+to be sitting in its own Files location first.
+
+#### Get the folder onto the iPad
+
+Orion's installer only lists folders that are already in its own Extensions
+directory, so this has to happen before you open Orion's extension screen.
+
+1. **Transfer `chrome-mv3-prod.zip` to the iPad.** AirDrop from a Mac, iCloud
+   Drive, or just download it in a browser. Anything that lands in the Files app
+   works.
+2. Open the **Files** app.
+3. Find the zip. AirDrop and browser downloads normally land in **Downloads**.
+4. **Long-press the zip → Uncompress.** You get a folder named
+   `chrome-mv3-prod` next to it.
+5. Navigate to **Browse → On My iPad → Orion → Extensions**.
+   - No **Orion** folder? Open the Orion app once, then look again — Orion
+     creates it on first launch.
+   - Orion's own file picker calls this same location **On This iPad**. Same
+     place, different label.
+6. **Move the `chrome-mv3-prod` folder into `Extensions`.** Long-press the
+   folder → **Move** → pick `Orion/Extensions`. Dragging it across in Split View
+   works too.
+
+At this point `On My iPad → Orion → Extensions → chrome-mv3-prod` exists and
+contains `manifest.json`. Nothing is installed yet.
+
+#### Install it in Orion
+
+1. Open **Orion**.
+2. Tap the **three dots** (**⋯**) in the toolbar.
+3. Tap **Extensions**.
+4. Tap the **+** button in the **bottom right**.
+5. Choose **Install from File**.
+6. The folder picker opens. Select the **`chrome-mv3-prod`** folder you moved
+   in the previous step — pick the _folder itself_, do not open it and pick a
+   file inside.
+7. Confirm. Orion installs it, and **Inspector Lab - DevTools** appears in the
+   extensions list.
+
+#### Updating a sideloaded build
+
+Sideloaded extensions never auto-update. To move to a newer build:
+
+1. Delete the old `chrome-mv3-prod` folder from
+   **On My iPad → Orion → Extensions**.
+2. Drop the new one in its place.
+3. Install it again from the **+ → Install from File** flow above.
+
+Removing the old folder first matters: two folders with the same manifest name
+make the picker ambiguous.
+
+### Desktop Chrome and Chromium, load unpacked
+
+1. Build it (above).
 2. Open `chrome://extensions`.
 3. Turn on **Developer mode** (top right).
 4. Click **Load unpacked**.
 5. Select **`apps/extension/build/chrome-mv3-prod`**.
 
-For development, `pnpm dev` writes `apps/extension/build/chrome-mv3-dev` instead and reloads as
-you edit. Load that folder the same way.
+For development, `pnpm dev` writes `apps/extension/build/chrome-mv3-dev`
+instead and reloads as you edit. Load that folder the same way.
 
----
+### Orion on macOS, from a file
 
-## 4. Orion on macOS
-
-Orion on macOS installs Chrome Web Store extensions directly and exposes the
-fuller desktop API surface, so it is the easiest place to run the extension
-outside Chrome. It also accepts a local build through its own extension
-settings; see
+Orion on macOS also accepts a local build through its own extension settings;
+see
 [Kagi's extension documentation](https://help.kagi.com/orion/browser-extensions/browser-extensions.html)
 for the current menu path, which moves between Orion releases.
 

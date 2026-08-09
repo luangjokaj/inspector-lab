@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/luangjokaj/inspector-lab"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/luangjokaj/inspector-lab/stars.svg" /><img alt="badge" src="https://shieldcn.dev/github/luangjokaj/inspector-lab/stars.svg?mode=light" /></picture></a>
-  <a href="#"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Chrome Web Store.svg" /><img alt="badge" src="https://shieldcn.dev/badge/Chrome Web Store.svg?mode=light" /></picture></a>
+  <a href="https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Chrome Web Store.svg" /><img alt="badge" src="https://shieldcn.dev/badge/Chrome Web Store.svg?mode=light" /></picture></a>
 </p>
 
 # Inspector Lab - DevTools
@@ -37,20 +37,11 @@ Highlights:
 
 ## Installation
 
-The extension is not on the Chrome Web Store yet, so it runs from a local build:
-
-```bash
-git clone git@github.com:luangjokaj/inspector-lab.git
-cd inspector-lab
-pnpm install
-pnpm build
-```
-
-Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `apps/extension/build/chrome-mv3-prod`.
+**[Install it from the Chrome Web Store →](https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle)** — the primary install path on every supported browser, iPad included.
 
 Works in desktop Chrome and Chromium-based browsers, and in [Orion by Kagi](https://help.kagi.com/orion/browser-extensions/ios-ipados-extensions.html) on iOS and iPadOS, a [free download for iPhone and iPad](https://orionbrowser.com/). On the iPad, Elements, Console, Sources, Cookies, and Storage all work, and Network captures live fetch/XHR traffic — where iOS trims the extension API surface, panels fall back to in-page sources and say so instead of going dark.
 
-**On an iPad or iPhone**, Orion installs the extension from a folder you first copy into `On My iPad → Orion → Extensions`, then pick with **⋯ → Extensions → + → Install from File**. Run `pnpm package` for a 1.2 MB zip to move across, and follow **[the step-by-step install guide →](docs/INSTALL.md)**.
+**On an iPad or iPhone**, Orion installs Chrome Web Store extensions directly: turn on Chrome extensions once under **⋯ → Settings → Extensions**, then tap **⋯ → Extensions → +** and install Inspector Lab - DevTools from the store. Full steps for every browser — plus running from a local build for development — are in **[the step-by-step install guide →](docs/INSTALL.md)**.
 
 [![Inspector Lab - DevTools on iPad](https://files.riangle.com/inspector-lab/ipados-inspector-lab-devtools-screenshot.png)](https://files.riangle.com/inspector-lab/ipad-demo.mp4)
 

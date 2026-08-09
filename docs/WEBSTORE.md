@@ -5,6 +5,9 @@ this file is verified against the code and the generated manifest
 (`apps/extension/build/chrome-mv3-prod/manifest.json`). Update this file first
 when permissions or behavior change, then update the dashboard.
 
+Live listing:
+<https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle>
+
 Item name (from manifest): **Inspector Lab - DevTools**
 Version: 0.1.0
 Category: **Developer Tools**

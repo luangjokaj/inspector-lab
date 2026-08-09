@@ -33,7 +33,7 @@ Zero telemetry, analytics, backend, or accounts — a hard product constraint en
 
 ## Versioning and releases
 
-No release has shipped yet. Do not bump the version in `apps/extension/package.json`; CHANGELOG entries stay under `## [Unreleased]` (Keep a Changelog format) until a release actually ships and gets a dated heading.
+0.1.0 is live on the [Chrome Web Store](https://chromewebstore.google.com/detail/inspector-lab-devtools/jhpgckgieinonbibmjdgejephdmdogle) — the primary install path, including for Orion on iPad. The version in `apps/extension/package.json` must match the latest published store version; bump it only as part of an actual store release. CHANGELOG entries accumulate under `## [Unreleased]` (Keep a Changelog format) and move to a dated version heading when that release ships to the store.
 
 ## Style
 
