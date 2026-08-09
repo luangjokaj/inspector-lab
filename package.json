@@ -8,10 +8,12 @@
     "dev": "pnpm -r --if-present --parallel run dev",
     "build": "pnpm -r --if-present run build",
     "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "biome lint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.7",
     "@parcel/transformer-inline-string": "2.9.3",
     "@types/node": "^26",
     "prettier": "^3.9.6",
