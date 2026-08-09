@@ -584,27 +584,31 @@ function Popup() {
               </Flex>
             )}
           </Flex>
-          <Flex $alignItems="center" $gap={8}>
-            <IconLink
-              href={REPORT_ISSUE_URL}
-              target="_blank"
-              rel="noreferrer noopener"
-              aria-label="Report an issue"
-              title="Report an issue"
-            >
-              <Icon name="Bug" />
-            </IconLink>
-            <RowLabel>Report an issue</RowLabel>
-            <IconLink
-              href={DOCS_URL}
-              target="_blank"
-              rel="noreferrer noopener"
-              aria-label="Docs"
-              title="Docs"
-            >
-              <Icon name="ArrowUpRight" />
-            </IconLink>
-            <RowLabel>Docs</RowLabel>
+          <Flex $alignItems="center" $gap={20}>
+            <Flex $alignItems="center" $gap={8}>
+              <IconLink
+                href={REPORT_ISSUE_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label="Report an issue"
+                title="Report an issue"
+              >
+                <Icon name="Bug" />
+              </IconLink>
+              <RowLabel>Report an issue</RowLabel>
+            </Flex>
+            <Flex $alignItems="center" $gap={8}>
+              <IconLink
+                href={DOCS_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label="Docs"
+                title="Docs"
+              >
+                <Icon name="ArrowUpRight" />
+              </IconLink>
+              <RowLabel>Docs</RowLabel>
+            </Flex>
           </Flex>
         </Flex>
 
