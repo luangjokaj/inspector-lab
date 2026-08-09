@@ -13,7 +13,7 @@ A movable, resizable in-page inspector built as a Manifest V3 Chrome extension. 
 
 Website and docs: **[inspectorlab.dev](https://inspectorlab.dev)**
 
-[![Inspector Lab - DevTools](https://files.riangle.com/inspector-lab/inspector-lab-devtools.png)](https://files.riangle.com/inspector-lab/ipad-demo.mp4)
+[![Inspector Lab - DevTools](https://inspectorlab.dev/panel-elements.png)](https://files.riangle.com/inspector-lab/ipad-demo.mp4)
 
 <p align="center"><sub>▶ <a href="https://files.riangle.com/inspector-lab/ipad-demo.mp4">Click to watch the demo</a> of Inspector Lab - DevTools running on iPadOS.</sub></p>
 
