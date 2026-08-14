@@ -141,6 +141,8 @@ const VIEWPORT_GUTTER = 12;
 const MAX_CONSOLE_ENTRIES = 1000;
 /** Evaluation preview cap, matching the background's own PREVIEW_LIMIT. */
 const PREVIEW_LIMIT = 2000;
+/** Caps expensive style provenance refreshes on mutation-heavy pages. */
+const STYLE_REFRESH_MS = 250;
 
 const MIN_DOCK_WIDTH = 320;
 const MIN_DOCK_HEIGHT = 160;
@@ -1259,6 +1261,66 @@ function Inspector({
     [log],
   );
 
+  /*
+   * Keep the selected node and its style provenance live when the page changes
+   * classes, style tags, ancestors, or layout. CSSOM insertRule() has no event,
+   * but page DOM mutations cover the common authoring and framework paths.
+   */
+  useEffect(() => {
+    const element = selectedElement;
+    if (!element || tab !== "Elements") return;
+    let refreshTimer: number | null = null;
+
+    const refresh = () => {
+      refreshTimer = null;
+      if (!element.isConnected) {
+        setSnapshot(null);
+        return;
+      }
+      setSnapshot(snapshotElement(element));
+    };
+    const scheduleRefresh = () => {
+      if (refreshTimer === null) {
+        refreshTimer = window.setTimeout(refresh, STYLE_REFRESH_MS);
+      }
+    };
+    const belongsToPage = (target: Node) => {
+      let current = target instanceof Element ? target : target.parentElement;
+      while (current) {
+        if (isInspectorNode(current)) return false;
+        current = current.parentElement;
+      }
+      return true;
+    };
+    const observer = new MutationObserver((records) => {
+      if (records.some((record) => belongsToPage(record.target))) {
+        scheduleRefresh();
+      }
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    const selectedRoot = element.getRootNode();
+    if (selectedRoot instanceof ShadowRoot) {
+      observer.observe(selectedRoot, {
+        attributes: true,
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+    }
+    window.addEventListener("resize", scheduleRefresh);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleRefresh);
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+    };
+  }, [selectedElement, tab]);
+
   /* Tree-row hover overlay, painted with the active theme's highlight pair. */
   const hoverHighlight = useCallback(
     (element: Element | null) =>
@@ -1289,6 +1351,7 @@ function Inspector({
       return;
     }
     applyStateStyles(selectedElement, forcedStates, selectedStateStyles);
+    setSnapshot(snapshotElement(selectedElement));
   }, [selectedElement, forcedStates, selectedStateStyles, shownTick]);
 
   /* The stylesheet must never outlive the inspector. */
@@ -1790,22 +1853,29 @@ function Inspector({
 
   function applyStyle(property: string, value: string) {
     const element = selectedElement;
+    const trimmedProperty = property.trim();
+    const important = /\s*!\s*important\s*$/i.test(value);
+    const trimmedValue = value.replace(/\s*!\s*important\s*$/i, "").trim();
 
-    if (!element || !property.trim() || !value.trim()) {
+    if (!element || !trimmedProperty || !trimmedValue) {
       const message = "Choose an element and enter a CSS rule.";
       log("error", message);
       return { error: true, message };
     }
 
-    if (!CSS.supports(property.trim(), value.trim())) {
+    if (!CSS.supports(trimmedProperty, trimmedValue)) {
       const message = "That property/value pair is not valid CSS.";
       log("error", message);
       return { error: true, message };
     }
 
-    element.style.setProperty(property.trim(), value.trim());
+    element.style.setProperty(
+      trimmedProperty,
+      trimmedValue,
+      important ? "important" : "",
+    );
     setSnapshot(snapshotElement(element));
-    const message = `${property.trim()}: ${value.trim()} applied to ${describeElement(element)}`;
+    const message = `${trimmedProperty}: ${trimmedValue}${important ? " !important" : ""} applied to ${describeElement(element)}`;
     log("log", message);
     return { error: false, message };
   }

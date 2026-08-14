@@ -1,4 +1,5 @@
 import { STATE_STYLE_ID } from "~injected/inspector-dom";
+import { registerInspectorStyleSheet } from "~injected/inspector-styles";
 
 /**
  * The forced-pseudo-state engine behind the Styles pane's "Force element
@@ -65,7 +66,10 @@ let fallbackTag: HTMLStyleElement | null = null;
  */
 function writeCss(text: string): void {
   try {
-    if (!adopted) adopted = new CSSStyleSheet();
+    if (!adopted) {
+      adopted = new CSSStyleSheet();
+      registerInspectorStyleSheet(adopted);
+    }
     if (!document.adoptedStyleSheets.includes(adopted)) {
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, adopted];
     }

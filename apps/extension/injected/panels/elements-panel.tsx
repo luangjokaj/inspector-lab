@@ -38,8 +38,10 @@ import {
   serializeElement,
   truncate,
   visibleChildren,
+  type DeclarationStatus,
   type ElementSnapshot,
   type MatchedRule,
+  type StyleDeclaration,
   type StylableElement,
 } from "~injected/inspector-dom";
 import {
@@ -370,7 +372,10 @@ const DeclarationToggle = styled.label<{ $alwaysVisible: boolean }>`
   }
 `;
 
-const DeclarationText = styled.span<{ $disabled?: boolean }>`
+const DeclarationText = styled.span<{
+  $disabled?: boolean;
+  $status?: DeclarationStatus;
+}>`
   flex: 1 1 auto;
   min-width: 0;
   white-space: pre-wrap;
@@ -383,13 +388,24 @@ const DeclarationText = styled.span<{ $disabled?: boolean }>`
     max-width: 100%;
   }
 
-  ${({ theme, $disabled }) =>
-    $disabled &&
+  ${({ theme, $disabled, $status }) =>
+    ($disabled || $status === "overridden" || $status === "not-inherited") &&
     css`
       /* A switched-off declaration reads as a single muted, struck-through
          line: the syntax colors go grey with it, as they do in DevTools. */
       color: ${theme.devtools.textDisabled};
       text-decoration: line-through;
+
+      span {
+        color: inherit;
+      }
+    `};
+
+  ${({ theme, $status }) =>
+    $status === "unknown" &&
+    css`
+      color: ${theme.devtools.textSubtle};
+      font-style: italic;
 
       span {
         color: inherit;
@@ -498,6 +514,25 @@ const RuleSource = styled.button`
     outline: solid 1px ${({ theme }) => theme.devtools.focusRing};
     outline-offset: -1px;
   }
+`;
+
+const RuleSourceLabel = styled.span`
+  flex: 0 1 auto;
+  max-width: 45%;
+  margin-left: auto;
+  overflow: hidden;
+  color: ${({ theme }) => theme.devtools.textSubtle};
+  font-size: ${({ theme }) => theme.devtools.fontSizeSmall};
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const RuleContextLabel = styled.div`
+  padding-left: ${DECLARATION_GUTTER};
+  overflow: hidden;
+  color: ${({ theme }) => theme.devtools.syntax.keyword};
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 
 /* --------------------------------------------------------- forced states */
@@ -1368,6 +1403,102 @@ function AuthoredRuleBlock({
   );
 }
 
+function declarationStatusLabel(status: DeclarationStatus): string | undefined {
+  if (status === "overridden") return "Overridden by a stronger declaration";
+  if (status === "partially-overridden") {
+    return "Some longhand values are overridden";
+  }
+  if (status === "not-inherited") {
+    return "This property is not inherited by the selected element";
+  }
+  if (status === "unknown") {
+    return "This rule uses a context whose active cascade cannot be resolved through CSSOM";
+  }
+  return undefined;
+}
+
+/** One read-only declaration from a page stylesheet or inherited inline rule. */
+function ReadOnlyDeclaration({ entry }: { entry: StyleDeclaration }) {
+  return (
+    <CssDeclaration title={declarationStatusLabel(entry.status)}>
+      <DeclarationGutter />
+      <DeclarationText $status={entry.status}>
+        <CssProperty>{entry.name}</CssProperty>
+        <Punct>: </Punct>
+        <CssValue>{entry.value}</CssValue>
+        {entry.priority === "important" && <CssValue> !important</CssValue>}
+        <Punct>;</Punct>
+      </DeclarationText>
+    </CssDeclaration>
+  );
+}
+
+/** A matched page rule, including its conditional at-rule context and source. */
+function ReadOnlyRuleBlock({
+  rule,
+  onOpenSource,
+}: {
+  rule: MatchedRule;
+  onOpenSource: (rule: MatchedRule) => void;
+}) {
+  const canOpenSource = rule.sourceLinkable;
+  return (
+    <CssBlock>
+      {rule.contexts.map((context, index) => (
+        <RuleContextLabel key={`${context}-${index}`} title={context}>
+          {context} {"{"}
+        </RuleContextLabel>
+      ))}
+      <RuleHeader>
+        <span>
+          <CssSelector>{rule.selector}</CssSelector> <Punct>{"{"}</Punct>
+        </span>
+        {canOpenSource ? (
+          <RuleSource
+            type="button"
+            title={`${rule.source} - open in Sources`}
+            onClick={() => onOpenSource(rule)}
+          >
+            {rule.source}
+          </RuleSource>
+        ) : (
+          <RuleSourceLabel title={rule.source}>{rule.source}</RuleSourceLabel>
+        )}
+      </RuleHeader>
+      {rule.declarations.length === 0 ? (
+        <NoDeclarations>no declarations</NoDeclarations>
+      ) : (
+        rule.declarations.map((entry) => (
+          <ReadOnlyDeclaration key={entry.name} entry={entry} />
+        ))
+      )}
+      <Punct>{"}"}</Punct>
+      {rule.contexts.map((context, index) => (
+        <RuleContextLabel key={`${context}-close-${index}`}>
+          {"}"}
+        </RuleContextLabel>
+      ))}
+    </CssBlock>
+  );
+}
+
+/** An ancestor's style attribute is inherited but must remain read-only here. */
+function InheritedInlineRule({
+  declarations,
+}: {
+  declarations: StyleDeclaration[];
+}) {
+  return (
+    <CssBlock>
+      <CssSelector>element.style</CssSelector> <Punct>{"{"}</Punct>
+      {declarations.map((entry) => (
+        <ReadOnlyDeclaration key={entry.name} entry={entry} />
+      ))}
+      <Punct>{"}"}</Punct>
+    </CssBlock>
+  );
+}
+
 /* ----------------------------------------------------------------- panel */
 
 export type ElementsPanelProps = {
@@ -1508,7 +1639,7 @@ export function ElementsPanel({
   const rows = useMemo(
     () => buildRows(root, expanded),
     // The DOM is read live, so re-flatten whenever selection or expansion moves.
-    [root, expanded, selectedElement],
+    [root, expanded, selectedElement, snapshot],
   );
 
   const toggle = (element: Element) => {
@@ -1586,7 +1717,13 @@ export function ElementsPanel({
   const styleBlocks: Record<string, StyleBlock> = {
     [INLINE_BLOCK]: {
       rows: mergeDeclarations(
-        snapshot?.inlineStyles ?? [],
+        (snapshot?.inlineStyles ?? []).map((entry) => ({
+          name: entry.name,
+          value:
+            entry.priority === "important"
+              ? `${entry.value} !important`
+              : entry.value,
+        })),
         styleState.blocks[INLINE_BLOCK] ?? NO_EDITS,
       ),
       apply: onApplyStyle,
@@ -1970,7 +2107,7 @@ export function ElementsPanel({
       }
     }
     return matches;
-  }, [root, searchQuery]);
+  }, [root, searchQuery, snapshot]);
 
   // -1 means "no match visited yet", so the first Enter lands on match 1.
   useEffect(() => setSearchIndex(-1), [searchQuery]);
@@ -2349,45 +2486,34 @@ export function ElementsPanel({
               </CssBlock>
 
               {snapshot.matchedRules.map((rule, index) => (
-                <CssBlock key={`${rule.selector}-${index}`}>
-                  <RuleHeader>
-                    <span>
-                      <CssSelector>{rule.selector}</CssSelector>{" "}
-                      <Punct>{"{"}</Punct>
-                    </span>
-                    <RuleSource
-                      type="button"
-                      title={`${rule.source} — open in Sources`}
-                      onClick={() => onOpenSource(rule)}
-                    >
-                      {rule.source}
-                    </RuleSource>
-                  </RuleHeader>
-                  {rule.declarations.length === 0 ? (
-                    <NoDeclarations>no declarations</NoDeclarations>
-                  ) : (
-                    rule.declarations.map((entry) => (
-                      <CssDeclaration key={entry.name}>
-                        {/* Empty gutter: a read-only rule has no checkbox, but
-                            its property names line up with the ones that do. */}
-                        <DeclarationGutter />
-                        <DeclarationText>
-                          <CssProperty>{entry.name}</CssProperty>
-                          <Punct>: </Punct>
-                          <CssValue>{entry.value}</CssValue>
-                          <Punct>;</Punct>
-                        </DeclarationText>
-                      </CssDeclaration>
-                    ))
-                  )}
-                  <Punct>{"}"}</Punct>
-                </CssBlock>
+                <ReadOnlyRuleBlock
+                  key={`${rule.selector}-${rule.source}-${index}`}
+                  rule={rule}
+                  onOpenSource={onOpenSource}
+                />
               ))}
               {snapshot.matchedRules.length === 0 && (
                 <PaneNote>
                   No stylesheet rules match {snapshot.selector}.
                 </PaneNote>
               )}
+              {snapshot.inheritedRules.map((section, sectionIndex) => (
+                <section key={`${section.element}-${sectionIndex}`}>
+                  <PaneHeader>
+                    Inherited from <CssSelector>{section.element}</CssSelector>
+                  </PaneHeader>
+                  {section.inlineStyles.length > 0 && (
+                    <InheritedInlineRule declarations={section.inlineStyles} />
+                  )}
+                  {section.matchedRules.map((rule, ruleIndex) => (
+                    <ReadOnlyRuleBlock
+                      key={`${rule.selector}-${rule.source}-${ruleIndex}`}
+                      rule={rule}
+                      onOpenSource={onOpenSource}
+                    />
+                  ))}
+                </section>
+              ))}
               {snapshot.inaccessibleSheets > 0 && (
                 <PaneNote>
                   {snapshot.inaccessibleSheets} cross-origin stylesheet
@@ -2395,6 +2521,16 @@ export function ElementsPanel({
                   read.
                 </PaneNote>
               )}
+              {snapshot.stylesTruncated && (
+                <PaneNote>
+                  Style collection stopped after 10,000 rules to keep this page
+                  responsive.
+                </PaneNote>
+              )}
+              <PaneNote>
+                Browser user-agent rules are reflected in Computed values but
+                are not exposed by page CSSOM.
+              </PaneNote>
             </Scroller>
           ) : (
             <>

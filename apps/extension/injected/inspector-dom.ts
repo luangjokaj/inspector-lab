@@ -7,6 +7,20 @@
  */
 
 import { FOREIGN_LAYER_ID } from "~injected/xml-compat";
+import {
+  collectElementStyles,
+  type DeclarationStatus,
+  type InheritedStyleSection,
+  type MatchedRule,
+  type StyleDeclaration,
+} from "~injected/inspector-styles";
+
+export type {
+  DeclarationStatus,
+  InheritedStyleSection,
+  MatchedRule,
+  StyleDeclaration,
+};
 
 export const HOST_ID = "inspector-lab-extension-root";
 /** The `<foreignObject>` the inspector renders into on SVG documents, where
@@ -21,19 +35,6 @@ export const SHOW_EVENT = "inspector-lab:show";
 
 export type AttributeEntry = { name: string; value: string };
 
-/** One stylesheet rule that applies to the inspected element. */
-export type MatchedRule = {
-  selector: string;
-  /** Where the rule came from: the stylesheet file name, or `<style>`. */
-  source: string;
-  /** Absolute URL of the owning sheet; null for inline `<style>` blocks. */
-  sourceHref: string | null;
-  /** Position among the page's `<style>` tags, for inline sheets only —
-   *  matches the Sources panel's `style-N` file ids. */
-  inlineIndex: number | null;
-  declarations: AttributeEntry[];
-};
-
 export type ElementSnapshot = {
   selector: string;
   tagName: string;
@@ -41,11 +42,15 @@ export type ElementSnapshot = {
   className: string;
   attributes: AttributeEntry[];
   /** Declarations on the element's `style` attribute, for the Styles pane. */
-  inlineStyles: AttributeEntry[];
+  inlineStyles: StyleDeclaration[];
   /** Stylesheet rules matching the element, most recently declared first. */
   matchedRules: MatchedRule[];
+  /** Author rules on ancestors, nearest ancestor first. */
+  inheritedRules: InheritedStyleSection[];
   /** Cross-origin stylesheets whose rules the inspector cannot read. */
   inaccessibleSheets: number;
+  /** A hostile or exceptionally large page exceeded the safe rule budget. */
+  stylesTruncated: boolean;
   /** Every resolved property, sorted, for the Computed pane. */
   computed: AttributeEntry[];
   text: string;
@@ -260,111 +265,6 @@ export function ancestorChain(element: Element): Element[] {
   return chain;
 }
 
-/** Label a stylesheet by its file name; inline `<style>` blocks have none. */
-function sheetLabel(sheet: CSSStyleSheet): string {
-  if (!sheet.href) return "<style>";
-  try {
-    const path = new URL(sheet.href).pathname;
-    return path.split("/").filter(Boolean).pop() ?? sheet.href;
-  } catch {
-    return sheet.href;
-  }
-}
-
-/**
- * Collects the stylesheet rules that currently match `element`, descending
- * into conditional groups only when their condition holds right now. Rules
- * are returned most recently declared first — an approximation of the
- * cascade (true ordering would need specificity), matching how DevTools
- * lists the winning rules near the top. Cross-origin sheets throw on
- * `cssRules` access and are only counted.
- */
-export function matchedCssRules(element: Element): {
-  rules: MatchedRule[];
-  inaccessible: number;
-} {
-  const rules: MatchedRule[] = [];
-  let inaccessible = 0;
-
-  const visit = (
-    list: CSSRuleList,
-    source: string,
-    sourceHref: string | null,
-    inlineIndex: number | null,
-  ) => {
-    for (const rule of Array.from(list)) {
-      if (rule instanceof CSSStyleRule) {
-        let matches = false;
-        try {
-          matches = element.matches(rule.selectorText);
-        } catch {
-          /* Selectors the engine cannot parse for matching are skipped. */
-        }
-        if (matches) {
-          rules.push({
-            selector: rule.selectorText,
-            source,
-            sourceHref,
-            inlineIndex,
-            declarations: Array.from(rule.style).map((name) => ({
-              name,
-              value: rule.style.getPropertyValue(name),
-            })),
-          });
-        }
-        continue;
-      }
-      if (rule instanceof CSSMediaRule) {
-        if (window.matchMedia(rule.conditionText).matches) {
-          visit(rule.cssRules, source, sourceHref, inlineIndex);
-        }
-        continue;
-      }
-      if (rule instanceof CSSSupportsRule) {
-        if (CSS.supports(rule.conditionText)) {
-          visit(rule.cssRules, source, sourceHref, inlineIndex);
-        }
-        continue;
-      }
-      // Other grouping rules (@layer blocks, etc.) always apply.
-      if (rule instanceof CSSGroupingRule) {
-        visit(rule.cssRules, source, sourceHref, inlineIndex);
-      }
-    }
-  };
-
-  // Tracks the sheet's position among `<style>` tags so a rule can link to
-  // the Sources panel's matching inline-stylesheet entry. Counted before the
-  // disabled check to stay aligned with the Sources panel's DOM-order list.
-  let styleTagIndex = -1;
-  for (const sheet of Array.from(document.styleSheets)) {
-    const owner = sheet.ownerNode;
-    // SVG documents carry SVGStyleElement tags; the Sources panel lists both.
-    const isStyleTag =
-      owner instanceof HTMLStyleElement || owner instanceof SVGStyleElement;
-    if (isStyleTag) {
-      if (owner.id === STATE_STYLE_ID) continue; // the inspector's own sheet
-      styleTagIndex += 1;
-    }
-    if (sheet.disabled) continue;
-    let cssRules: CSSRuleList;
-    try {
-      cssRules = sheet.cssRules;
-    } catch {
-      inaccessible += 1;
-      continue;
-    }
-    visit(
-      cssRules,
-      sheetLabel(sheet),
-      sheet.href,
-      isStyleTag ? styleTagIndex : null,
-    );
-  }
-
-  return { rules: rules.reverse(), inaccessible };
-}
-
 export function snapshotElement(element: StylableElement): ElementSnapshot {
   const computed = window.getComputedStyle(element);
   const rect = element.getBoundingClientRect();
@@ -373,12 +273,7 @@ export function snapshotElement(element: StylableElement): ElementSnapshot {
     .map((name) => ({ name, value: computed.getPropertyValue(name) }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const inlineStyles: AttributeEntry[] = Array.from(element.style).map(
-    (name) => ({ name, value: element.style.getPropertyValue(name) }),
-  );
-
-  const { rules: matchedRules, inaccessible: inaccessibleSheets } =
-    matchedCssRules(element);
+  const styles = collectElementStyles(element, STATE_STYLE_ID);
 
   return {
     selector: uniqueSelector(element),
@@ -389,9 +284,11 @@ export function snapshotElement(element: StylableElement): ElementSnapshot {
       name,
       value,
     })),
-    inlineStyles,
-    matchedRules,
-    inaccessibleSheets,
+    inlineStyles: styles.inlineStyles,
+    matchedRules: styles.matchedRules,
+    inheritedRules: styles.inheritedRules,
+    inaccessibleSheets: styles.inaccessibleSheets,
+    stylesTruncated: styles.stylesTruncated,
     computed: computedEntries,
     text: truncate(collapseWhitespace(element.textContent ?? ""), 180),
     rect: {
