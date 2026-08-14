@@ -5,6 +5,41 @@ All notable changes to Inspector Lab - DevTools are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-14
+
+### Added
+
+- **Chrome-like CSS provenance in the Elements sidebar.** Styles now shows
+  matching author rules with cascade status, `!important`, active at-rule
+  context, adopted and open shadow-root stylesheets, plus nearest-ancestor-first
+  `Inherited from …` sections. Overridden and non-inherited declarations are
+  crossed out, uncertain container/scope/layer declarations are identified,
+  and the selected snapshot refreshes as the page changes. Cross-origin and
+  browser user-agent rule bodies remain unavailable through page CSSOM, but
+  their resolved values are still represented in Computed.
+
+### Fixed
+
+- **Readable error instead of a raw WebKit TypeError when tab access is
+  missing.** On Orion, `chrome.tabs.query` is relayed through
+  `window.webkit.messageHandlers` and throws `undefined is not an object
+(evaluating 'window.webkit.messageHandlers.tabs.postMessage')` when that
+  bridge lacks a tabs handler — and the popup showed that text verbatim.
+  Tab queries now go through a resilient callback-form wrapper
+  (`lib/tabs.ts`, same pattern as storage), the popup explains the failure
+  in plain words, and the background's abandoned-session sweep skips —
+  rather than falsely tombstoning every live session — when the tabs API
+  is unavailable. Also hardened the launch path against an empty tab list,
+  which previously crashed with the same style of unreadable TypeError.
+
+- **Diagnostics no longer log the inspected site's unhandled rejections.** On
+  Orion's WebKit runtime, page-world promise rejections reach the injected
+  inspector's rejection listener, so site API failures (e.g. payload objects
+  like `{"status":0,...}`) were recorded as extension errors and could crowd
+  real ones out of the 100-entry ring buffer. Inspector-source rejections are
+  now attributed via the reason's Error stack and only logged when they point
+  into the extension's own code.
+
 ## [0.1.1] - 2026-08-09
 
 ### Added

@@ -1,7 +1,7 @@
 {
   "name": "@inspector-lab/extension",
   "displayName": "Inspector Lab - DevTools",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A movable in-page DevTools window for any browser, even iPad: DOM Inspector, Elements, Console, Network, Sources, Cookies, Storage.",
   "author": "Luan Gjokaj",
   "license": "MIT",
