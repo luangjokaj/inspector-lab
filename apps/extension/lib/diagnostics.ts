@@ -113,8 +113,15 @@ function describeReason(reason: unknown): string {
  * errors fire the same window "error" event, and logging the inspected site's
  * bugs would drown the extension's own. Extension code is identifiable by its
  * chrome-extension:// filename; for the inspector source, events without one
- * (cross-origin "Script error." noise included) are dropped. Rejections need
- * no filter — each world's promises reject on its own global.
+ * (cross-origin "Script error." noise included) are dropped.
+ *
+ * Rejections need the same treatment: on Orion's WebKit runtime the page's
+ * own unhandled rejections reach the content-script listener (observed in the
+ * field — site API clients rejecting with plain payload objects were logged
+ * as inspector errors). A rejection has no filename, so attribution goes
+ * through the reason instead: only Error reasons whose stack points into the
+ * extension are the extension's own. Every rejection path in this codebase
+ * rejects with an Error subclass, so nothing of ours is lost.
  */
 export function installGlobalDiagnostics(source: DiagnosticSource): void {
   const scope = globalThis as typeof globalThis & {
@@ -148,6 +155,10 @@ export function installGlobalDiagnostics(source: DiagnosticSource): void {
     });
     scope.addEventListener("unhandledrejection", (event) => {
       const { reason } = event as PromiseRejectionEvent;
+      if (source === "inspector") {
+        const stack = reason instanceof Error ? reason.stack : undefined;
+        if (!stack || (extensionUrl && !stack.includes(extensionUrl))) return;
+      }
       void appendDiagnostic({
         source,
         level: "error",
