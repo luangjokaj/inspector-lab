@@ -49,6 +49,7 @@ import {
   installGlobalDiagnostics,
 } from "~lib/diagnostics";
 import { storageGet, storageSet } from "~lib/storage";
+import { queryTabs } from "~lib/tabs";
 import { evaluateInPage } from "~injected/page-eval";
 import inspectorBundleUrl from "url:./injected/inspector-entry.tsx";
 import consolePrehookUrl from "url:./injected/console-prehook.ts";
@@ -406,7 +407,10 @@ function sweepAbandonedSessions(): Promise<void> {
       const keys = Object.keys(sessions);
       if (keys.length === 0) return;
 
-      const tabs = await chrome.tabs.query({});
+      // null = tabs API unavailable here; sweeping on it would tombstone
+      // every live session as crashed. Skip — the next start can retry.
+      const tabs = await queryTabs({});
+      if (tabs === null) return;
       const liveTabIds = new Set(tabs.map((tab) => tab.id));
       let changed = false;
       for (const key of keys) {

@@ -20,6 +20,7 @@ import {
   saveColorSchemeSetting,
   saveCustomThemeSetting,
 } from "~lib/settings";
+import { queryTabs } from "~lib/tabs";
 import {
   clearDiagnostics,
   installGlobalDiagnostics,
@@ -450,12 +451,15 @@ function Popup() {
     setMessage("");
 
     try {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
+      const tabs = await queryTabs({ active: true, currentWindow: true });
+      if (tabs === null) {
+        throw new Error(
+          "This browser did not give the extension access to its tabs, so the inspector cannot find the current page. Reopening the popup or restarting the browser may restore it.",
+        );
+      }
 
-      if (!tab.id || !tab.url) {
+      const [tab] = tabs;
+      if (!tab?.id || !tab.url) {
         throw new Error("No active webpage is available.");
       }
 
