@@ -331,6 +331,7 @@ async function revealInspector(tabId: number): Promise<boolean> {
   try {
     const [existing] = await chrome.scripting.executeScript({
       target: { tabId },
+      injectImmediately: true,
       func: revealExistingInspector,
       args: [INSPECTOR_HOST_ID, INSPECTOR_SHOW_EVENT],
     });
@@ -356,6 +357,7 @@ async function confirmInspectorMounted(tabId: number): Promise<boolean> {
   try {
     const [check] = await chrome.scripting.executeScript({
       target: { tabId },
+      injectImmediately: true,
       func: inspectorHostExists,
       args: [INSPECTOR_HOST_ID],
     });
@@ -400,6 +402,9 @@ function ColorSchemeSync() {
 
 function Popup() {
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
+  // Names the launch step in flight on the button. With no console on iPad,
+  // a launch that never settles is only diagnosable by where it stopped.
+  const [launchStep, setLaunchStep] = useState("");
   const [message, setMessage] = useState("");
   const [customTheme, setCustomTheme] = useState(true);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
@@ -448,6 +453,7 @@ function Popup() {
 
   async function launchInspector() {
     setLaunchState("loading");
+    setLaunchStep("Finding the page…");
     setMessage("");
 
     try {
@@ -469,19 +475,30 @@ function Popup() {
         );
       }
 
-      // Before any await chains: permission prompts need the user gesture.
+      // Asked before any further await (permission prompts need the user
+      // gesture) but never awaited ahead of the injection: Orion can leave the
+      // request pending with no visible prompt, which held the popup on
+      // "Injecting…" for good. No timeout either, as the answer is human-gated.
       const cookieAccess = /^https?:/.test(tab.url)
-        ? await requestCookieAccess(tab.url)
-        : false;
+        ? requestCookieAccess(tab.url)
+        : Promise.resolve(false);
 
+      setLaunchStep("Checking for an open inspector…");
       const revealed = await revealInspector(tab.id);
 
       if (!revealed) {
+        // Every popup injection skips the document_idle wait: WebKit (Orion)
+        // never reaches idle on a page whose load stays pending (a dev server
+        // behind a proxy), so the call never settles and the popup sits on
+        // "Injecting…" for good. The bundle only needs documentElement.
+        setLaunchStep("Injecting the inspector…");
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
+          injectImmediately: true,
           files: [toExtensionPath(inspectorBundleUrl)],
         });
 
+        setLaunchStep("Confirming the inspector started…");
         if (!(await confirmInspectorMounted(tab.id))) {
           throw new Error(
             "The inspector was injected but did not start on this page. This browser may not support everything it needs.",
@@ -491,9 +508,14 @@ function Popup() {
 
       setLaunchState("success");
       setMessage(
-        cookieAccess
-          ? "Inspector launched. You can close this popup."
-          : "Inspector launched. Cookie access was not granted, so the Cookies tab will stay empty on this site.",
+        "Inspector launched. Cookie access has not been answered yet, so the Cookies tab may stay empty on this site.",
+      );
+      void cookieAccess.then((granted) =>
+        setMessage(
+          granted
+            ? "Inspector launched. You can close this popup."
+            : "Inspector launched. Cookie access was not granted, so the Cookies tab will stay empty on this site.",
+        ),
       );
     } catch (error) {
       setLaunchState("error");
@@ -548,7 +570,7 @@ function Popup() {
           disabled={launchState === "loading"}
           onClick={launchInspector}
         >
-          {launchState === "loading" ? "Injecting…" : "Open page inspector"}
+          {launchState === "loading" ? launchStep : "Open page inspector"}
         </Button>
 
         {message && (

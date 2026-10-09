@@ -5,6 +5,16 @@ All notable changes to Inspector Lab - DevTools are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The popup no longer hangs on "Injecting…".** Its injections now skip the
+  `document_idle` wait, so the inspector opens immediately even on a page
+  whose load never settles, and the cookie-access request no longer blocks
+  the launch: the popup reports its answer whenever it arrives. While a launch
+  is in flight, the button names the step it is on.
+
 ## [0.1.2] - 2026-08-14
 
 ### Added
